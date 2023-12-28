@@ -394,6 +394,8 @@ func (w *Workloader) checkCondition10(ctx context.Context, warehouse int) error 
 func (w *Workloader) checkCondition11(ctx context.Context, warehouse int) error {
 	s := getTPCCState(ctx)
 
+	expected := orderPerDistrict - newOrderPerDistrict
+
 	// Entries in the CUSTOMER, ORDER and NEW-ORDER tables must satisfy the relationship:
 	// (count(*) from ORDER) - (count(*) from NEW-ORDER) = 2100
 	// for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID).
@@ -407,9 +409,9 @@ SELECT count(*) FROM
 	) order_new_order
 JOIN (SELECT c_w_id, c_d_id, count(*) customer_count FROM customer GROUP BY c_w_id, c_d_id) customer
 ON order_new_order.no_w_id = customer.c_w_id AND order_new_order.no_d_id = customer.c_d_id
-WHERE c_w_id = ? AND order_count - 2100 != new_order_count`
+WHERE c_w_id = ? AND order_count - %d != new_order_count`
 
-	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
+	rows, err := s.Conn.QueryContext(ctx, convertToPQ(fmt.Sprintf(query, expected), w.cfg.Driver), warehouse)
 	if err != nil {
 		return fmt.Errorf("exec %s failed %v", query, err)
 	}

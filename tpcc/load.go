@@ -15,7 +15,9 @@ const (
 	districtPerWarehouse = 10
 	customerPerDistrict  = 30
 	orderPerDistrict     = 30
-	newOrderPerDistrict  = 90
+	newOrderPerDistrict  = 9
+
+	ytdPaymentPerCustomer = 10.0
 
 	timeFormat = "2006-01-02 15:04:05"
 )
@@ -59,7 +61,7 @@ func (w *Workloader) loadWarehouse(ctx context.Context, warehouse int) error {
 	wState := randState(s.R, s.Buf)
 	wZip := randZip(s.R, s.Buf)
 	wTax := randTax(s.R)
-	wYtd := 300000.00
+	wYtd := districtPerWarehouse * customerPerDistrict * ytdPaymentPerCustomer
 
 	if err := l.WriteRow(ctx,
 		warehouse, wName, wStree1, wStree2, wCity, wState, wZip, wTax, wYtd,
@@ -133,8 +135,8 @@ d_city, d_state, d_zip, d_tax, d_ytd, d_next_o_id) VALUES `
 		dState := randState(s.R, s.Buf)
 		dZip := randZip(s.R, s.Buf)
 		dTax := randTax(s.R)
-		dYtd := 30000.00
-		dNextOID := 3001
+		dYtd := customerPerDistrict * ytdPaymentPerCustomer
+		dNextOID := orderPerDistrict + 1
 
 		if err := l.WriteRow(ctx,
 			dID, dWID,
@@ -164,7 +166,7 @@ c_discount, c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_data) VAL
 		cDID := district
 		cWID := warehouse
 		var cLast string
-		if i < 1000 {
+		if i < customerPerDistrict/3 {
 			cLast = randCLastSyllables(i, s.Buf)
 		} else {
 			cLast = randCLast(s.R, s.Buf)
@@ -220,7 +222,7 @@ func (w *Workloader) loadHistory(ctx context.Context, warehouse int, district in
 		hDID := district
 		hWID := warehouse
 		hDate := w.initLoadTime
-		hAmount := 10.00
+		hAmount := ytdPaymentPerCustomer
 		hData := randChars(s.R, s.Buf, 12, 24)
 
 		if err := l.WriteRow(ctx,
@@ -256,7 +258,7 @@ o_carrier_id, o_ol_cnt, o_all_local) VALUES `
 		oWID := warehouse
 		oEntryD := w.initLoadTime
 		var oCarrierID sql.NullInt64
-		if oID < 2101 {
+		if oID < orderPerDistrict-newOrderPerDistrict+1 {
 			oCarrierID = sql.NullInt64{
 				Int64: int64(randInt(s.R, 1, 10)),
 				Valid: true,
@@ -288,7 +290,7 @@ func (w *Workloader) loadNewOrder(ctx context.Context, warehouse int, district i
 	for i := 0; i < newOrderPerDistrict; i++ {
 		s.Buf.Reset()
 
-		noOID := 2101 + i
+		noOID := orderPerDistrict - newOrderPerDistrict + i + 1
 		noDID := district
 		noWID := warehouse
 
@@ -326,7 +328,7 @@ ol_i_id, ol_supply_w_id, ol_delivery_d, ol_quantity, ol_amount, ol_dist_info) VA
 
 			var olAmount float64
 			var olDeliveryD sql.NullString
-			if olOID < 2101 {
+			if olOID < orderPerDistrict-newOrderPerDistrict+1 {
 				olDeliveryD = sql.NullString{
 					String: w.initLoadTime,
 					Valid:  true,
