@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	maxItems             = 100000
-	stockPerWarehouse    = 100000
+	maxItems             = 1000
+	stockPerWarehouse    = 1000
 	districtPerWarehouse = 10
-	customerPerDistrict  = 3000
-	orderPerDistrict     = 3000
-	newOrderPerDistrict  = 900
+	customerPerDistrict  = 30
+	orderPerDistrict     = 30
+	newOrderPerDistrict  = 90
 
 	timeFormat = "2006-01-02 15:04:05"
 )
