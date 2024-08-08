@@ -82,7 +82,7 @@ func (w *Workloader) checkCondition1(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("sum(d_ytd) - max(w_ytd) should be 0 in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] sum(d_ytd) - max(w_ytd) should be 0 in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -117,7 +117,7 @@ func (w *Workloader) checkCondition2(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("POWER((d_next_o_id -1 - mo), 2) + POWER((d_next_o_id -1 - mno),2) != 0 in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] POWER((d_next_o_id -1 - mo), 2) + POWER((d_next_o_id -1 - mno),2) != 0 in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -147,7 +147,7 @@ func (w *Workloader) checkCondition3(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("max(no_o_id)-min(no_o_id)+1 - count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] max(no_o_id)-min(no_o_id)+1 - count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -177,7 +177,7 @@ func (w *Workloader) checkCondition4(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -207,7 +207,7 @@ func (w *Workloader) checkCondition5(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -244,7 +244,7 @@ WHERE T.o_ol_cnt != T.order_line_count`
 		}
 
 		if count != 0 {
-			return fmt.Errorf("all of O_OL_CNT - count(order_line) for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) should be 0 in warehouse %d", warehouse)
+			return fmt.Errorf("[DATA ERROR] all of O_OL_CNT - count(order_line) for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) should be 0 in warehouse %d", warehouse)
 		}
 
 	}
@@ -275,7 +275,7 @@ func (w *Workloader) checkCondition7(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -305,7 +305,7 @@ func (w *Workloader) checkCondition8(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -335,7 +335,7 @@ func (w *Workloader) checkCondition9(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -380,7 +380,7 @@ func (w *Workloader) checkCondition10(ctx context.Context, warehouse int) error 
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
@@ -423,7 +423,7 @@ WHERE c_w_id = ? AND order_count - %d != new_order_count`
 		}
 
 		if count != 0 {
-			return fmt.Errorf("all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be 2100 in warehouse %d", warehouse)
+			return fmt.Errorf("[DATA ERROR] all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be 2100 in warehouse %d", warehouse)
 		}
 	}
 
@@ -456,7 +456,7 @@ func (w *Workloader) checkCondition12(ctx context.Context, warehouse int) error 
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("count(*) in warehouse %d, but got %f", warehouse, diff)
+			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
 		}
 	}
 
