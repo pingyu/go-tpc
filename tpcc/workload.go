@@ -420,27 +420,32 @@ func (w *Workloader) OutputStats(ifSummaryReport bool) {
 				totalOps += hist.GetInfo().Ops
 			}
 		}
+		var (
+			tpmC     float64
+			tpmTotal float64
+			efc      float64
+		)
 		if newOrderHist != nil && !newOrderHist.Empty() {
 			result := newOrderHist.GetInfo()
 			const specWarehouseFactor = 12.86
-			tpmC := result.Ops * 60
-			tpmTotal := totalOps * 60
-			efc := 100 * tpmC / (specWarehouseFactor * float64(w.cfg.Warehouses))
-			lines := [][]string{
-				{
-					util.FloatToOneString(tpmC),
-					util.FloatToOneString(tpmTotal),
-					util.FloatToOneString(efc) + "%",
-				},
-			}
-			switch w.cfg.OutputStyle {
-			case util.OutputStylePlain:
-				util.RenderString("tpmC: %s, tpmTotal: %s, efficiency: %s\n", nil, lines)
-			case util.OutputStyleTable:
-				util.RenderTable([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
-			case util.OutputStyleJson:
-				util.RenderJson([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
-			}
+			tpmC = result.Ops * 60
+			tpmTotal = totalOps * 60
+			efc = 100 * tpmC / (specWarehouseFactor * float64(w.cfg.Warehouses))
+		}
+		lines := [][]string{
+			{
+				util.FloatToOneString(tpmC),
+				util.FloatToOneString(tpmTotal),
+				util.FloatToOneString(efc) + "%",
+			},
+		}
+		switch w.cfg.OutputStyle {
+		case util.OutputStylePlain:
+			util.RenderString("tpmC: %s, tpmTotal: %s, efficiency: %s\n", nil, lines)
+		case util.OutputStyleTable:
+			util.RenderTable([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
+		case util.OutputStyleJson:
+			util.RenderJson([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
 		}
 	}
 }
