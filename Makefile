@@ -1,5 +1,5 @@
 GOARCH := $(if $(GOARCH),$(GOARCH),amd64)
-GO=GO15VENDOREXPERIMENT="1" CGO_ENABLED=0 GOARCH=$(GOARCH) GO111MODULE=on go
+GO=GOEXPERIMENT=jsonv2 CGO_ENABLED=0 GOARCH=$(GOARCH) GO111MODULE=on go
 
 PACKAGE_LIST  := go list ./...| grep -vE "cmd"
 PACKAGES  := $$($(PACKAGE_LIST))
@@ -25,13 +25,13 @@ fmt:
 	@git diff --exit-code .
 
 test:
-	go test ./... -cover $(PACKAGES)
+	$(GO) test ./... -cover $(PACKAGES)
 
 build: mod
 	$(GOBUILD) -o ./bin/go-tpc cmd/go-tpc/*
 
 vet:
-	go vet ./...
+	$(GO) vet ./...
 
 mod:
 	@echo "go mod tidy"

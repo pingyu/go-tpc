@@ -63,6 +63,13 @@ func executeTpcc(action string) {
 		}
 		w, err = tpcc.NewCSVWorkloader(globalDB, &tpccConfig)
 	default:
+		// Set a reasonable connection max lifetime when auto-refresh is enabled
+		// This ensures connections are actually closed and not just returned to pool
+		if tpccConfig.ConnRefreshInterval > 0 {
+			globalDB.SetConnMaxLifetime(tpccConfig.ConnRefreshInterval)
+			fmt.Printf("Auto-setting connection max lifetime to %v (refresh interval)\n", tpccConfig.ConnRefreshInterval)
+		}
+
 		w, err = tpcc.NewWorkloader(globalDB, &tpccConfig)
 	}
 
@@ -97,6 +104,8 @@ func registerTpcc(root *cobra.Command) {
 		},
 	}
 	cmdPrepare.PersistentFlags().BoolVar(&tpccConfig.NoCheck, "no-check", false, "TPCC prepare check, default false")
+	cmdPrepare.PersistentFlags().BoolVar(&tpccConfig.UseFK, "use-fk", false, "TPCC using foreign key, default false")
+	cmdPrepare.PersistentFlags().BoolVar(&tpccConfig.UseClusteredIndex, "use-clustered-index", true, "TPCC use clustered index, default true")
 	cmdPrepare.PersistentFlags().StringVar(&tpccConfig.OutputType, "output-type", "", "Output file type."+
 		" If empty, then load data to db. Current only support csv")
 	cmdPrepare.PersistentFlags().StringVar(&tpccConfig.OutputDir, "output-dir", "", "Output directory for generating file if specified")
@@ -115,6 +124,7 @@ func registerTpcc(root *cobra.Command) {
 	cmdRun.PersistentFlags().BoolVar(&tpccConfig.Wait, "wait", false, "including keying & thinking time described on TPC-C Standard Specification")
 	cmdRun.PersistentFlags().DurationVar(&tpccConfig.MaxMeasureLatency, "max-measure-latency", measurement.DefaultMaxLatency, "max measure latency in millisecond")
 	cmdRun.PersistentFlags().IntSliceVar(&tpccConfig.Weight, "weight", []int{45, 43, 4, 4, 4}, "Weight for NewOrder, Payment, OrderStatus, Delivery, StockLevel")
+	cmdRun.Flags().DurationVar(&tpccConfig.ConnRefreshInterval, "conn-refresh-interval", 0, "automatically refresh database connections at specified intervals to balance traffic across new replicas (0 = disabled, e.g., 10s)")
 
 	var cmdCleanup = &cobra.Command{
 		Use:   "cleanup",

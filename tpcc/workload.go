@@ -43,6 +43,9 @@ type tpccState struct {
 	deliveryStmts    map[string]*sql.Stmt
 	stockLevelStmt   map[string]*sql.Stmt
 	paymentStmts     map[string]*sql.Stmt
+
+	// for automatic connection refresh
+	lastConnRefresh time.Time
 }
 
 const (
@@ -74,9 +77,10 @@ type Config struct {
 	MaxMeasureLatency time.Duration
 
 	// for prepare sub-command only
-	OutputType      string
-	OutputDir       string
-	SpecifiedTables string
+	OutputType        string
+	OutputDir         string
+	SpecifiedTables   string
+	UseClusteredIndex bool
 
 	// connection, retry count when commiting statement fails, default 0
 	PrepareRetryCount    int
@@ -84,6 +88,9 @@ type Config struct {
 
 	// output style
 	OutputStyle string
+
+	// automatic connection refresh interval to balance traffic across new replicas
+	ConnRefreshInterval time.Duration
 }
 
 // Workloader is TPCC workload
@@ -140,7 +147,7 @@ func NewWorkloader(db *sql.DB, cfg *Config) (workload.Workloader, error) {
 		db:                  db,
 		cfg:                 cfg,
 		initLoadTime:        time.Now().Format(timeFormat),
-		ddlManager:          newDDLManager(cfg.Parts, cfg.UseFK, cfg.Warehouses, cfg.PartitionType),
+		ddlManager:          newDDLManager(cfg.Parts, cfg.UseFK, cfg.Warehouses, cfg.PartitionType, cfg.UseClusteredIndex),
 		rtMeasurement:       measurement.NewMeasurement(resetMaxLat),
 		waitTimeMeasurement: measurement.NewMeasurement(resetMaxLat),
 	}
@@ -168,9 +175,10 @@ func (w *Workloader) Name() string {
 // InitThread implements Workloader interface
 func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
 	s := &tpccState{
-		TpcState: workload.NewTpcState(ctx, w.db),
-		index:    0,
-		decks:    make([]int, 0, 23),
+		TpcState:        workload.NewTpcState(ctx, w.db),
+		index:           0,
+		decks:           make([]int, 0, 23),
+		lastConnRefresh: time.Now(),
 	}
 
 	for index, txn := range w.txns {
@@ -224,13 +232,39 @@ func getTPCCState(ctx context.Context) *tpccState {
 }
 
 // Run implements Workloader interface
-func (w *Workloader) Run(ctx context.Context, threadID int) error {
+func (w *Workloader) Run(ctx context.Context, threadID int) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in TPC-C Run (thread %d): %v", threadID, r)
+		}
+	}()
+
 	s := getTPCCState(ctx)
 	refreshConn := false
-	if err := s.Conn.PingContext(ctx); err != nil {
-		if err := s.RefreshConn(ctx); err != nil {
-			return err
+
+	// Helper function to safely refresh connection with panic recovery
+	safeRefreshConn := func() error {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during connection refresh (thread %d): %v", threadID, r)
+			}
+		}()
+		return s.RefreshConn(ctx)
+	}
+
+	// Check if automatic connection refresh is needed
+	if w.cfg.ConnRefreshInterval > 0 && time.Since(s.lastConnRefresh) >= w.cfg.ConnRefreshInterval {
+		if err := safeRefreshConn(); err != nil {
+			return fmt.Errorf("automatic connection refresh failed (thread %d): %w", threadID, err)
 		}
+		s.lastConnRefresh = time.Now()
+		refreshConn = true
+	} else if err := s.Conn.PingContext(ctx); err != nil {
+		// Fallback to ping-based refresh if automatic refresh didn't happen
+		if err := safeRefreshConn(); err != nil {
+			return fmt.Errorf("ping-based connection refresh failed (thread %d): %w", threadID, err)
+		}
+		s.lastConnRefresh = time.Now()
 		refreshConn = true
 	}
 	if s.newOrderStmts == nil || refreshConn {
@@ -308,7 +342,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 	}
 
 	start := time.Now()
-	err := txn.action(ctx, threadID)
+	err = txn.action(ctx, threadID)
 
 	w.rtMeasurement.Measure(txn.name, time.Now().Sub(start), err)
 
