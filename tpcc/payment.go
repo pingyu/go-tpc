@@ -122,6 +122,7 @@ func (w *Workloader) runPayment(ctx context.Context, thread int) error {
 		if err != nil {
 			return fmt.Errorf("exec %s failed %v", paymentSelectCustomerListByLast, err)
 		}
+		defer rows.Close()
 		var ids []int
 		for rows.Next() {
 			var id int
@@ -129,6 +130,9 @@ func (w *Workloader) runPayment(ctx context.Context, thread int) error {
 				return fmt.Errorf("exec %s failed %v", paymentSelectCustomerListByLast, err)
 			}
 			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("exec %s failed %v", paymentSelectCustomerListByLast, err)
 		}
 		if len(ids) == 0 {
 			return fmt.Errorf("customer for (%d, %d, %s) not found", d.cWID, d.cDID, d.cLast)
