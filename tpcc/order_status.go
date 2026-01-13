@@ -67,6 +67,7 @@ func (w *Workloader) runOrderStatus(ctx context.Context, thread int) error {
 		}
 		for i := 0; i < nameCnt/2 && rows.Next(); i++ {
 			if err := rows.Scan(&d.cBalance, &d.cFirst, &d.cMiddle, &d.cID); err != nil {
+				rows.Close()
 				return err
 			}
 		}

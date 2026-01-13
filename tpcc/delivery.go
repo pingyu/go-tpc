@@ -90,7 +90,7 @@ func (w *Workloader) runDelivery(ctx context.Context, thread int) error {
 		return fmt.Errorf("exec %s failed %v", deliveryUpdateOrder, err)
 	}
 
-	if rows, err := s.deliveryStmts[deliverySelectOrders].QueryContext(ctx,
+	orderRows, err := s.deliveryStmts[deliverySelectOrders].QueryContext(ctx,
 		d.wID, 1, orders[0].oID,
 		d.wID, 2, orders[1].oID,
 		d.wID, 3, orders[2].oID,
@@ -101,16 +101,20 @@ func (w *Workloader) runDelivery(ctx context.Context, thread int) error {
 		d.wID, 8, orders[7].oID,
 		d.wID, 9, orders[8].oID,
 		d.wID, 10, orders[9].oID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("exec %s failed %v", deliverySelectOrders, err)
-	} else {
-		for rows.Next() {
-			var dID, cID int
-			if err = rows.Scan(&dID, &cID); err != nil {
-				return fmt.Errorf("exec %s failed %v", deliverySelectOrders, err)
-			}
-			orders[dID-1].cID = cID
+	}
+	defer orderRows.Close()
+	for orderRows.Next() {
+		var dID, cID int
+		if err = orderRows.Scan(&dID, &cID); err != nil {
+			return fmt.Errorf("exec %s failed %v", deliverySelectOrders, err)
 		}
+		orders[dID-1].cID = cID
+	}
+	if err := orderRows.Err(); err != nil {
+		return fmt.Errorf("exec %s failed %v", deliverySelectOrders, err)
 	}
 
 	if _, err = s.deliveryStmts[deliveryUpdateOrderLine].ExecContext(ctx, time.Now().Format(timeFormat),
@@ -128,7 +132,7 @@ func (w *Workloader) runDelivery(ctx context.Context, thread int) error {
 		return fmt.Errorf("exec %s failed %v", deliveryUpdateOrderLine, err)
 	}
 
-	if rows, err := s.deliveryStmts[deliverySelectSumAmount].QueryContext(ctx,
+	amountRows, err := s.deliveryStmts[deliverySelectSumAmount].QueryContext(ctx,
 		d.wID, 1, orders[0].oID,
 		d.wID, 2, orders[1].oID,
 		d.wID, 3, orders[2].oID,
@@ -139,17 +143,21 @@ func (w *Workloader) runDelivery(ctx context.Context, thread int) error {
 		d.wID, 8, orders[7].oID,
 		d.wID, 9, orders[8].oID,
 		d.wID, 10, orders[9].oID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("exec %s failed %v", deliverySelectSumAmount, err)
-	} else {
-		for rows.Next() {
-			var dID int
-			var amount float64
-			if err = rows.Scan(&dID, &amount); err != nil {
-				return fmt.Errorf("exec %s failed %v", deliverySelectOrders, err)
-			}
-			orders[dID-1].amount = amount
+	}
+	defer amountRows.Close()
+	for amountRows.Next() {
+		var dID int
+		var amount float64
+		if err = amountRows.Scan(&dID, &amount); err != nil {
+			return fmt.Errorf("exec %s failed %v", deliverySelectSumAmount, err)
 		}
+		orders[dID-1].amount = amount
+	}
+	if err := amountRows.Err(); err != nil {
+		return fmt.Errorf("exec %s failed %v", deliverySelectSumAmount, err)
 	}
 
 	for i := 0; i < districtPerWarehouse; i++ {

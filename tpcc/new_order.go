@@ -209,13 +209,14 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 	for i := range items {
 		selectItemArgs[i] = items[i].olIID
 	}
-	rows, err := s.newOrderStmts[selectItemSQL].QueryContext(ctx, selectItemArgs...)
+	itemRows, err := s.newOrderStmts[selectItemSQL].QueryContext(ctx, selectItemArgs...)
 	if err != nil {
 		return fmt.Errorf("exec %s failed %v", selectItemSQL, err)
 	}
-	for rows.Next() {
+	defer itemRows.Close()
+	for itemRows.Next() {
 		var tmpItem orderItem
-		err := rows.Scan(&tmpItem.iPrice, &tmpItem.iName, &tmpItem.iData, &tmpItem.olIID)
+		err := itemRows.Scan(&tmpItem.iPrice, &tmpItem.iName, &tmpItem.iData, &tmpItem.olIID)
 		if err != nil {
 			return fmt.Errorf("exec %s failed %v", selectItemSQL, err)
 		}
@@ -224,6 +225,9 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 		item.iName = tmpItem.iName
 		item.iData = tmpItem.iData
 		item.foundInItems = true
+	}
+	if err := itemRows.Err(); err != nil {
+		return fmt.Errorf("exec %s failed %v", selectItemSQL, err)
 	}
 	for i := range items {
 		item := &items[i]
@@ -243,16 +247,17 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 		selectStockArgs[i*2] = d.wID
 		selectStockArgs[i*2+1] = items[i].olIID
 	}
-	rows, err = s.newOrderStmts[selectStockSQL].QueryContext(ctx, selectStockArgs...)
+	stockRows, err := s.newOrderStmts[selectStockSQL].QueryContext(ctx, selectStockArgs...)
 	if err != nil {
 		return fmt.Errorf("exec %s failed %v", selectStockSQL, err)
 	}
-	for rows.Next() {
+	defer stockRows.Close()
+	for stockRows.Next() {
 		var iID int
 		var quantity int
 		var data string
 		var dists [10]string
-		err = rows.Scan(&iID, &quantity, &data, &dists[0], &dists[1], &dists[2], &dists[3], &dists[4], &dists[5], &dists[6], &dists[7], &dists[8], &dists[9])
+		err = stockRows.Scan(&iID, &quantity, &data, &dists[0], &dists[1], &dists[2], &dists[3], &dists[4], &dists[5], &dists[6], &dists[7], &dists[8], &dists[9])
 		if err != nil {
 			return fmt.Errorf("exec %s failed %v", selectStockSQL, err)
 		}
@@ -265,6 +270,9 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 		item.sQuantity = quantity
 		item.sDist = dists[d.dID-1]
 		item.olAmount = float64(item.olQuantity) * item.iPrice * (1 + d.wTax + d.dTax) * (1 - d.cDiscount)
+	}
+	if err := stockRows.Err(); err != nil {
+		return fmt.Errorf("exec %s failed %v", selectStockSQL, err)
 	}
 
 	// Process 8
