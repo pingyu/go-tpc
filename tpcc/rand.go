@@ -133,15 +133,15 @@ func init() {
 
 // refer 4.3.2.3 and 2.1.6
 func randCLast(r *rand.Rand, b *util.BufAllocator) string {
-	return randCLastSyllables(((r.Intn(256)|r.Intn(1000))+cLoad)%1000, b)
+	return randCLastSyllables(((r.Intn(256)|r.Intn(customerPerDistrict/3))+cLoad)%customerPerDistrict/3, b)
 }
 
 // refer 2.1.6
 func randCustomerID(r *rand.Rand) int {
-	return ((r.Intn(1024) | (r.Intn(3000) + 1) + cCustomerID) % 3000) + 1
+	return ((r.Intn(1024) | (r.Intn(customerPerDistrict) + 1) + cCustomerID) % customerPerDistrict) + 1
 }
 
 // refer 2.1.6
 func randItemID(r *rand.Rand) int {
-	return ((r.Intn(8190) | (r.Intn(100000) + 1) + cItemID) % 100000) + 1
+	return ((r.Intn(8190) | (r.Intn(maxItems) + 1) + cItemID) % maxItems) + 1
 }

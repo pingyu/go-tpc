@@ -236,7 +236,7 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 				// Rollback
 				return nil
 			}
-			return fmt.Errorf("item %d not found", item.olIID)
+			return fmt.Errorf("[DATA ERROR] item %d not found", item.olIID)
 		}
 	}
 
@@ -279,7 +279,7 @@ func (w *Workloader) runNewOrder(ctx context.Context, thread int) error {
 	for i := 0; i < d.oOlCnt; i++ {
 		item := &items[i]
 		if !item.foundInStock {
-			return fmt.Errorf("item (%d, %d) not found in stock", d.wID, item.olIID)
+			return fmt.Errorf("[DATA ERROR] item (%d, %d) not found in stock", d.wID, item.olIID)
 		}
 		if item.olIID < 0 {
 			return nil
