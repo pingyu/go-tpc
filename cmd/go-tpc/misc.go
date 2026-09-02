@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -52,12 +53,6 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 
 	switch action {
 	case "prepare":
-		// Do cleanup only if dropData is set and not generate csv data.
-		if dropData {
-			if err := w.Cleanup(ctx, index); err != nil {
-				return err
-			}
-		}
 		return w.Prepare(ctx, index)
 	case "cleanup":
 		return w.Cleanup(ctx, index)
@@ -75,8 +70,8 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 		select {
 		case <-ctx.Done():
 			if !silence {
-				fmt.Printf("[%s] %s worker %d stopped due to timeout after %d iterations\n",
-					time.Now().Format("2006-01-02 15:04:05"), action, index, i)
+				fmt.Printf("[%s] %s worker %d stopped due to %s after %d iterations\n",
+					time.Now().Format("2006-01-02 15:04:05"), action, index, contextTerminationReason(ctx), i)
 			}
 			return nil
 		default:
@@ -87,18 +82,19 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 			// Check if the error is due to timeout/cancellation
 			if ctx.Err() != nil && (isPureContextTermination(err) || isToleratedNetworkError(err)) {
 				if !silence {
-					fmt.Printf("[%s] %s worker %d stopped due to timeout: %v\n",
-						time.Now().Format("2006-01-02 15:04:05"), action, index, err)
+					fmt.Printf("[%s] %s worker %d stopped due to %s: %v\n",
+						time.Now().Format("2006-01-02 15:04:05"), action, index, contextTerminationReason(ctx), err)
 				}
-				return nil // Don't treat timeout as an error
+				return nil
 			}
 
-			if !silence {
-				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
+			if shouldIgnoreError(err) {
+				if !silence {
+					fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
+				}
+				continue
 			}
-			if !shouldIgnoreError(err) {
-				return err
-			}
+			return err
 		}
 	}
 
@@ -106,6 +102,24 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 }
 
 func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) error {
+	return executeConfiguredWorkload(ctx, workLoaderSetting{workLoader: w, threads: threads}, action)
+}
+
+type workLoaderSetting struct {
+	workLoader    workload.Workloader
+	threads       int
+	onWorkerError func(error)
+}
+
+func executeConfiguredWorkload(ctx context.Context, setting workLoaderSetting, action string) error {
+	w := setting.workLoader
+	threads := setting.threads
+	if action == "prepare" && dropData {
+		if err := executeConfiguredWorkload(ctx, setting, "cleanup"); err != nil {
+			return fmt.Errorf("cleanup before prepare: %w", err)
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(threads)
 
@@ -128,8 +142,12 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 			}
 		}
 	}()
+	defer func() {
+		outputCancel()
+		<-ch
+	}()
 	if w.Name() == "tpch" && action == "run" {
-		err := w.Exec(`create or replace view revenue0 (supplier_no, total_revenue) as
+		err := execWorkloadSQL(workerCtx, w, `create or replace view revenue0 (supplier_no, total_revenue) as
 	select
 		l_suppkey,
 		sum(l_extendedprice * (1 - l_discount))
@@ -141,7 +159,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	group by
 		l_suppkey;`)
 		if err != nil {
-			panic(fmt.Sprintf("a fatal occurred when preparing view data: %v", err))
+			return fmt.Errorf("prepare tpch view: %w", err)
 		}
 	}
 	// CH benchmark requires the revenue1 view for analytical queries.
@@ -150,7 +168,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	// the view won't exist. So we create it here when action is "run" to ensure
 	// the view is available regardless of how data was loaded.
 	if w.Name() == "ch" && action == "run" {
-		err := w.Exec(`create or replace view revenue1 (supplier_no, total_revenue) as (
+		err := execWorkloadSQL(workerCtx, w, `create or replace view revenue1 (supplier_no, total_revenue) as (
     select	mod((s_w_id * s_i_id),10000) as supplier_no,
               sum(ol_amount) as total_revenue
     from	order_line, stock
@@ -158,7 +176,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
       and ol_delivery_d >= '2007-01-02 00:00:00.000000'
     group by mod((s_w_id * s_i_id),10000));`)
 		if err != nil {
-			panic(fmt.Sprintf("a fatal occurred when preparing view data: %v", err))
+			return fmt.Errorf("prepare ch view: %w", err)
 		}
 	}
 	enabledDumpPlanReplayer := w.IsPlanReplayerDumpEnabled()
@@ -181,12 +199,11 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 		go func(index int) {
 			defer wg.Done()
 			if err := execute(workerCtx, w, action, threads, index); err != nil {
-				if action == "prepare" {
-					panic(fmt.Sprintf("a fatal occurred when preparing data: %v", err))
-				}
-				fmt.Printf("execute %s failed, err %v\n", action, err)
 				workerErrors <- err
 				stopWorkers()
+				if setting.onWorkerError != nil {
+					setting.onWorkerError(err)
+				}
 			}
 		}(i)
 	}
@@ -200,12 +217,25 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 		}
 	}
 
-	if action == "prepare" {
+	if action == "prepare" && firstError == nil {
 		// For prepare, we must check the data consistency after all prepare finished
 		checkPrepare(ctx, w)
 	}
-	outputCancel()
-
-	<-ch
 	return firstError
+}
+
+func contextTerminationReason(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "cancellation"
+}
+
+func execWorkloadSQL(ctx context.Context, w workload.Workloader, sql string) error {
+	if executor, ok := w.(interface {
+		ExecContext(context.Context, string) error
+	}); ok {
+		return executor.ExecContext(ctx, sql)
+	}
+	return w.Exec(sql)
 }

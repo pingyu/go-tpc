@@ -114,7 +114,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 	rows, err := s.Conn.QueryContext(ctx, query)
 	w.measurement.Measure(queryName, time.Since(start), err)
 	if err != nil {
-		return fmt.Errorf("execute query %s failed %v", queryName, err)
+		return fmt.Errorf("execute query %s failed: %w", queryName, err)
 	}
 	if w.cfg.ExecExplainAnalyze {
 		table, err := util.RenderExplainAnalyze(rows)

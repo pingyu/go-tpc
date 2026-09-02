@@ -99,8 +99,9 @@ type Workloader struct {
 
 	cfg *Config
 
-	createTableWg sync.WaitGroup
-	initLoadTime  string
+	createTableWg  sync.WaitGroup
+	createTableErr error
+	initLoadTime   string
 
 	ddlManager *ddlManager
 
@@ -215,12 +216,13 @@ func (w *Workloader) CleanupThread(ctx context.Context, threadID int) {
 func (w *Workloader) Prepare(ctx context.Context, threadID int) error {
 	if w.db != nil {
 		if threadID == 0 {
-			if err := w.ddlManager.createTables(ctx, w.cfg.Driver); err != nil {
-				return err
-			}
+			w.createTableErr = w.ddlManager.createTables(ctx, w.cfg.Driver)
 		}
 		w.createTableWg.Done()
 		w.createTableWg.Wait()
+		if w.createTableErr != nil {
+			return fmt.Errorf("create tables: %w", w.createTableErr)
+		}
 	}
 
 	return prepareWorkload(ctx, w, w.cfg.Threads, w.cfg.Warehouses, threadID)

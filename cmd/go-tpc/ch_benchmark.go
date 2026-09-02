@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/pingcap/go-tpc/ch"
 	"github.com/pingcap/go-tpc/pkg/workload"
@@ -40,8 +41,8 @@ func registerCHBenchmark(root *cobra.Command) {
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare data for the workload",
-		Run: func(cmd *cobra.Command, args []string) {
-			executeCH("prepare", nil)
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return executeCH("prepare", nil)
 		},
 	}
 	cmdPrepare.PersistentFlags().IntVar(&chConfig.TiFlashReplica,
@@ -81,8 +82,8 @@ func registerCHBenchmark(root *cobra.Command) {
 				apPorts = ports
 			}
 		},
-		Run: func(cmd *cobra.Command, _ []string) {
-			executeCH("run", func() (*sql.DB, error) {
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return executeCH("run", func() (*sql.DB, error) {
 				return newDB(makeTargets(apHosts, apPorts), driver, user, password, dbName, apConnParams)
 			})
 		},
@@ -117,7 +118,7 @@ func registerCHBenchmark(root *cobra.Command) {
 	root.AddCommand(cmd)
 }
 
-func executeCH(action string, openAP func() (*sql.DB, error)) {
+func executeCH(action string, openAP func() (*sql.DB, error)) error {
 	if maxProcs != 0 {
 		runtime.GOMAXPROCS(maxProcs)
 	}
@@ -176,25 +177,46 @@ func executeCH(action string, openAP func() (*sql.DB, error)) {
 	defer cancel()
 
 	if action == "prepare" {
-		executeWorkload(timeoutCtx, ap, 1, "prepare")
-		return
+		if err := executeWorkload(timeoutCtx, ap, 1, "prepare"); err != nil {
+			return fmt.Errorf("execute prepare failed: %w", err)
+		}
+		return nil
 	}
 
-	type workLoaderSetting struct {
-		workLoader workload.Workloader
-		threads    int
+	settings := []workLoaderSetting{{workLoader: tp, threads: threads}, {workLoader: ap, threads: acThreads}}
+	if err := executeCHWorkloads(timeoutCtx, settings); err != nil {
+		return err
 	}
-	var doneWg sync.WaitGroup
-	for _, workLoader := range []workLoaderSetting{{workLoader: tp, threads: threads}, {workLoader: ap, threads: acThreads}} {
-		doneWg.Add(1)
-		go func(workLoader workload.Workloader, threads int) {
-			executeWorkload(timeoutCtx, workLoader, threads, "run")
-			doneWg.Done()
-		}(workLoader.workLoader, workLoader.threads)
-	}
-	doneWg.Wait()
 	fmt.Printf("Finished: %d OLTP workers, %d OLAP workers\n", threads, acThreads)
-	for _, workLoader := range []workLoaderSetting{{workLoader: tp, threads: threads}, {workLoader: ap, threads: acThreads}} {
+	for _, workLoader := range settings {
 		workLoader.workLoader.OutputStats(true)
 	}
+	return nil
+}
+
+func executeCHWorkloads(ctx context.Context, settings []workLoaderSetting) error {
+	sharedCtx, cancelPeers := context.WithCancel(ctx)
+	defer cancelPeers()
+	group, groupCtx := errgroup.WithContext(sharedCtx)
+	var firstWorkerError error
+	var firstWorkerErrorOnce sync.Once
+	for _, setting := range settings {
+		setting.onWorkerError = func(err error) {
+			firstWorkerErrorOnce.Do(func() {
+				firstWorkerError = fmt.Errorf("execute %s workload: %w", setting.workLoader.Name(), err)
+			})
+			cancelPeers()
+		}
+		group.Go(func() error {
+			if err := executeConfiguredWorkload(groupCtx, setting, "run"); err != nil {
+				return fmt.Errorf("execute %s workload: %w", setting.workLoader.Name(), err)
+			}
+			return nil
+		})
+	}
+	groupError := group.Wait()
+	if firstWorkerError != nil {
+		return firstWorkerError
+	}
+	return groupError
 }

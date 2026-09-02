@@ -33,7 +33,7 @@ func isSysVarSupported(ver util.SemVersion, sysVar string) bool {
 	return ver.Compare(util.SemVersion{Major: 7, Minor: 1, Patch: 0}) >= 0
 }
 
-func executeTpch(action string) {
+func executeTpch(action string) error {
 	openDB()
 	defer closeDB()
 
@@ -74,9 +74,12 @@ func executeTpch(action string) {
 	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
 	defer cancel()
 
-	executeWorkload(timeoutCtx, w, threads, action)
+	if err := executeWorkload(timeoutCtx, w, threads, action); err != nil {
+		return fmt.Errorf("execute %s failed: %w", action, err)
+	}
 	fmt.Println("Finished")
 	w.OutputStats(true)
+	return nil
 }
 
 func getServerVersion(db *sql.DB) (string, error) {
@@ -126,8 +129,8 @@ func registerTpch(root *cobra.Command) {
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare data for the workload",
-		Run: func(cmd *cobra.Command, args []string) {
-			executeTpch("prepare")
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return executeTpch("prepare")
 		},
 	}
 
@@ -165,8 +168,8 @@ func registerTpch(root *cobra.Command) {
 	var cmdRun = &cobra.Command{
 		Use:   "run",
 		Short: "Run workload",
-		Run: func(cmd *cobra.Command, args []string) {
-			executeTpch("run")
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return executeTpch("run")
 		},
 	}
 
@@ -193,8 +196,8 @@ func registerTpch(root *cobra.Command) {
 	var cmdCleanup = &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup data for the workload",
-		Run: func(cmd *cobra.Command, args []string) {
-			executeTpch("cleanup")
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return executeTpch("cleanup")
 		},
 	}
 

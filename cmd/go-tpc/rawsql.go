@@ -28,13 +28,12 @@ func registerRawsql(root *cobra.Command) {
 	cmdRun := &cobra.Command{
 		Use:   "run",
 		Short: "Run workload",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			if len(queryFiles) == 0 {
-				util.StdErrLogger.Printf("empty query files")
-				os.Exit(1)
+				return fmt.Errorf("empty query files")
 			}
 
-			execRawsql("run")
+			return execRawsql("run")
 		},
 	}
 
@@ -69,7 +68,7 @@ func registerRawsql(root *cobra.Command) {
 	root.AddCommand(cmd)
 }
 
-func execRawsql(action string) {
+func execRawsql(action string) error {
 	openDB()
 	defer closeDB()
 
@@ -104,7 +103,10 @@ func execRawsql(action string) {
 
 	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
 	defer cancel()
-	executeWorkload(timeoutCtx, w, threads, action)
+	if err := executeWorkload(timeoutCtx, w, threads, action); err != nil {
+		return fmt.Errorf("execute %s failed: %w", action, err)
+	}
 	fmt.Println("Finished")
 	w.OutputStats(true)
+	return nil
 }

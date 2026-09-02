@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -15,14 +16,22 @@ import (
 )
 
 type errorWorkloader struct {
+	name       string
 	runErr     error
+	prepareErr error
 	checkErr   error
+	execErr    error
+	exec       func(context.Context) error
 	onRun      func()
+	run        func(context.Context) error
 	runCount   int
 	checkCount int
 }
 
 func (w *errorWorkloader) Name() string {
+	if w.name != "" {
+		return w.name
+	}
 	return "test"
 }
 
@@ -33,17 +42,20 @@ func (w *errorWorkloader) InitThread(ctx context.Context, _ int) context.Context
 func (w *errorWorkloader) CleanupThread(context.Context, int) {}
 
 func (w *errorWorkloader) Prepare(context.Context, int) error {
-	return nil
+	return w.prepareErr
 }
 
 func (w *errorWorkloader) CheckPrepare(context.Context, int) error {
 	return nil
 }
 
-func (w *errorWorkloader) Run(context.Context, int) error {
+func (w *errorWorkloader) Run(ctx context.Context, _ int) error {
 	w.runCount++
 	if w.onRun != nil {
 		w.onRun()
+	}
+	if w.run != nil {
+		return w.run(ctx)
 	}
 	return w.runErr
 }
@@ -76,7 +88,14 @@ func (w *errorWorkloader) FinishPlanReplayerDump() error {
 }
 
 func (w *errorWorkloader) Exec(string) error {
-	return nil
+	return w.execErr
+}
+
+func (w *errorWorkloader) ExecContext(ctx context.Context, _ string) error {
+	if w.exec != nil {
+		return w.exec(ctx)
+	}
+	return w.execErr
 }
 
 func TestExecute_ignores_all_non_data_errors_when_ignore_error_is_enabled(t *testing.T) {
@@ -106,6 +125,24 @@ func TestExecute_ignores_all_non_data_errors_when_ignore_error_is_enabled(t *tes
 			require.Equal(t, 2, w.runCount)
 		})
 	}
+}
+
+func TestExecute_reports_ignored_error_when_not_silent(t *testing.T) {
+	// Given
+	configureExecuteTest(t, true)
+	silence = false
+	runErr := errors.New("retryable query failure")
+	w := &errorWorkloader{runErr: runErr}
+	var err error
+
+	// When
+	output := captureStdout(t, func() {
+		err = execute(context.Background(), w, "run", 1, 0)
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.Contains(t, output, runErr.Error())
 }
 
 func TestExecute_never_ignores_typed_data_errors(t *testing.T) {
@@ -223,6 +260,26 @@ func TestExecute_treats_pure_context_or_network_errors_as_deadline_completion(t 
 	}
 }
 
+func TestExecute_reports_cancellation_without_calling_it_timeout(t *testing.T) {
+	// Given
+	configureExecuteTest(t, false)
+	silence = false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &errorWorkloader{}
+	var err error
+
+	// When
+	output := captureStdout(t, func() {
+		err = execute(ctx, w, "run", 1, 0)
+	})
+
+	// Then
+	require.NoError(t, err)
+	require.Contains(t, output, "cancellation")
+	require.NotContains(t, output, "timeout")
+}
+
 func TestExecuteWorkload_returns_nonignored_worker_error(t *testing.T) {
 	configureExecuteTest(t, true)
 	dataErr := workload.NewDataError("inconsistent warehouse totals")
@@ -233,6 +290,48 @@ func TestExecuteWorkload_returns_nonignored_worker_error(t *testing.T) {
 	require.ErrorIs(t, err, dataErr)
 }
 
+func TestExecuteWorkload_returns_prepare_worker_error(t *testing.T) {
+	// Given
+	configureExecuteTest(t, false)
+	prepareErr := errors.New("prepare failed")
+	w := &errorWorkloader{prepareErr: prepareErr}
+
+	// When
+	err := executeWorkload(context.Background(), w, 1, "prepare")
+
+	// Then
+	require.ErrorIs(t, err, prepareErr)
+}
+
+func TestExecuteWorkload_returns_view_setup_error(t *testing.T) {
+	// Given
+	configureExecuteTest(t, false)
+	viewErr := errors.New("create view failed")
+	w := &errorWorkloader{name: "tpch", execErr: viewErr}
+
+	// When
+	err := executeWorkload(context.Background(), w, 1, "run")
+
+	// Then
+	require.ErrorIs(t, err, viewErr)
+}
+
+func TestExecuteWorkload_passes_cancellation_to_view_setup(t *testing.T) {
+	// Given
+	configureExecuteTest(t, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := &errorWorkloader{name: "tpch", exec: func(ctx context.Context) error {
+		return ctx.Err()
+	}}
+
+	// When
+	err := executeWorkload(ctx, w, 1, "run")
+
+	// Then
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func configureExecuteTest(t *testing.T, ignore bool) {
 	t.Helper()
 
@@ -240,15 +339,39 @@ func configureExecuteTest(t *testing.T, ignore bool) {
 	previousIgnoreError := ignoreError
 	previousOutputInterval := outputInterval
 	previousSilence := silence
+	previousDropData := dropData
 	t.Cleanup(func() {
 		totalCount = previousTotalCount
 		ignoreError = previousIgnoreError
 		outputInterval = previousOutputInterval
 		silence = previousSilence
+		dropData = previousDropData
 	})
 
 	totalCount = 1
 	ignoreError = ignore
 	outputInterval = time.Hour
 	silence = true
+	dropData = false
+}
+
+func captureStdout(t *testing.T, run func()) string {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	original := os.Stdout
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Stdout = original
+		reader.Close()
+		writer.Close()
+	})
+
+	run()
+	os.Stdout = original
+	require.NoError(t, writer.Close())
+	output, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	return string(output)
 }

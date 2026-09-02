@@ -239,9 +239,9 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 	if err != nil {
 		// Check if error is due to context cancellation/timeout
 		if ctx.Err() != nil {
-			return fmt.Errorf("query %s cancelled due to timeout: %v", queryName, ctx.Err())
+			return fmt.Errorf("query %s cancelled due to timeout: %w", queryName, ctx.Err())
 		}
-		return fmt.Errorf("execute query %s failed %v", queryName, err)
+		return fmt.Errorf("execute query %s failed: %w", queryName, err)
 	}
 	defer rows.Close()
 
@@ -254,7 +254,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 		return nil
 	}
 	if err := w.drainQueryResult(queryName, rows); err != nil {
-		return fmt.Errorf("execute query %s failed %v", queryName, err)
+		return fmt.Errorf("execute query %s failed: %w", queryName, err)
 	}
 
 	return nil
@@ -365,12 +365,10 @@ func (w *Workloader) FinishPlanReplayerDump() error {
 }
 
 func (w *Workloader) Exec(sql string) error {
-	ctx := context.Background()
-	s := &chState{
-		TpcState: workload.NewTpcState(ctx, w.db),
-	}
-	defer s.Conn.Close()
+	return w.ExecContext(context.Background(), sql)
+}
 
-	_, err := s.Conn.ExecContext(ctx, sql)
+func (w *Workloader) ExecContext(ctx context.Context, sql string) error {
+	_, err := w.db.ExecContext(ctx, sql)
 	return err
 }

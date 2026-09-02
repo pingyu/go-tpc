@@ -25,8 +25,9 @@ type CSVWorkLoader struct {
 	// to be generated when preparing csv data.
 	tables map[string]bool
 
-	createTableWg sync.WaitGroup
-	initLoadTime  string
+	createTableWg  sync.WaitGroup
+	createTableErr error
+	initLoadTime   string
 
 	ddlManager *ddlManager
 }
@@ -118,12 +119,13 @@ func (c *CSVWorkLoader) CleanupThread(ctx context.Context, _ int) {
 func (c *CSVWorkLoader) Prepare(ctx context.Context, threadID int) error {
 	if c.db != nil {
 		if threadID == 0 {
-			if err := c.ddlManager.createTables(ctx, c.cfg.Driver); err != nil {
-				return err
-			}
+			c.createTableErr = c.ddlManager.createTables(ctx, c.cfg.Driver)
 		}
 		c.createTableWg.Done()
 		c.createTableWg.Wait()
+		if c.createTableErr != nil {
+			return fmt.Errorf("create tables: %w", c.createTableErr)
+		}
 	}
 
 	return prepareWorkload(ctx, c, c.cfg.Threads, c.cfg.Warehouses, threadID)
