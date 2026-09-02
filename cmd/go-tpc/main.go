@@ -271,7 +271,10 @@ func main() {
 		}
 	}()
 
-	rootCmd.Execute()
+	if err := rootCmd.Execute(); err != nil {
+		cancel()
+		os.Exit(1)
+	}
 
 	cancel()
 }

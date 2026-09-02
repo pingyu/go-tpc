@@ -3,6 +3,8 @@ package tpcc
 import (
 	"context"
 	"fmt"
+
+	"github.com/pingcap/go-tpc/pkg/workload"
 )
 
 // CheckPrepare implements Workloader interface
@@ -54,7 +56,7 @@ func (w *Workloader) check(ctx context.Context, threadID int, checkAll bool) err
 		for conditionIdx, check := range checks {
 			fmt.Printf("begin to check warehouse %d at condition %s\n", warehouse, conditionIdx)
 			if err := check(ctx, warehouse); err != nil {
-				return fmt.Errorf("check warehouse %d at condition %s failed %v", warehouse, conditionIdx, err)
+				return fmt.Errorf("check warehouse %d at condition %s failed: %w", warehouse, conditionIdx, err)
 			}
 		}
 	}
@@ -72,7 +74,7 @@ func (w *Workloader) checkCondition1(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -82,7 +84,7 @@ func (w *Workloader) checkCondition1(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] sum(d_ytd) - max(w_ytd) should be 0 in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("sum(d_ytd) - max(w_ytd) should be 0 in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -107,7 +109,7 @@ func (w *Workloader) checkCondition2(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse, warehouse, warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -117,7 +119,7 @@ func (w *Workloader) checkCondition2(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] POWER((d_next_o_id -1 - mo), 2) + POWER((d_next_o_id -1 - mno),2) != 0 in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("POWER((d_next_o_id -1 - mo), 2) + POWER((d_next_o_id -1 - mno),2) != 0 in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -137,7 +139,7 @@ func (w *Workloader) checkCondition3(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -147,7 +149,7 @@ func (w *Workloader) checkCondition3(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] max(no_o_id)-min(no_o_id)+1 - count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("max(no_o_id)-min(no_o_id)+1 - count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -167,7 +169,7 @@ func (w *Workloader) checkCondition4(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse, warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -177,7 +179,7 @@ func (w *Workloader) checkCondition4(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -197,7 +199,7 @@ func (w *Workloader) checkCondition5(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -207,7 +209,7 @@ func (w *Workloader) checkCondition5(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -234,7 +236,7 @@ WHERE T.o_ol_cnt != T.order_line_count`
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -244,7 +246,7 @@ WHERE T.o_ol_cnt != T.order_line_count`
 		}
 
 		if count != 0 {
-			return fmt.Errorf("[DATA ERROR] all of O_OL_CNT - count(order_line) for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) should be 0 in warehouse %d", warehouse)
+			return workload.NewDataError(fmt.Sprintf("all of O_OL_CNT - count(order_line) for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) should be 0 in warehouse %d", warehouse))
 		}
 
 	}
@@ -265,7 +267,7 @@ func (w *Workloader) checkCondition7(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -275,7 +277,7 @@ func (w *Workloader) checkCondition7(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -295,7 +297,7 @@ func (w *Workloader) checkCondition8(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -305,7 +307,7 @@ func (w *Workloader) checkCondition8(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -325,7 +327,7 @@ func (w *Workloader) checkCondition9(ctx context.Context, warehouse int) error {
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse, warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -335,7 +337,7 @@ func (w *Workloader) checkCondition9(ctx context.Context, warehouse int) error {
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -370,7 +372,7 @@ func (w *Workloader) checkCondition10(ctx context.Context, warehouse int) error 
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse, warehouse, warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -380,7 +382,7 @@ func (w *Workloader) checkCondition10(ctx context.Context, warehouse int) error 
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 
@@ -413,7 +415,7 @@ WHERE c_w_id = ? AND order_count - %d != new_order_count`
 
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(fmt.Sprintf(query, expected), w.cfg.Driver), warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -423,7 +425,7 @@ WHERE c_w_id = ? AND order_count - %d != new_order_count`
 		}
 
 		if count != 0 {
-			return fmt.Errorf("[DATA ERROR] all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be 2100 in warehouse %d", warehouse)
+			return workload.NewDataError(fmt.Sprintf("all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be 2100 in warehouse %d", warehouse))
 		}
 	}
 
@@ -446,7 +448,7 @@ func (w *Workloader) checkCondition12(ctx context.Context, warehouse int) error 
 		WHERE c1+c_ytd_payment <> sm`
 	rows, err := s.Conn.QueryContext(ctx, convertToPQ(query, w.cfg.Driver), warehouse, warehouse)
 	if err != nil {
-		return fmt.Errorf("exec %s failed %v", query, err)
+		return fmt.Errorf("exec %s failed: %w", query, err)
 	}
 	defer rows.Close()
 
@@ -456,7 +458,7 @@ func (w *Workloader) checkCondition12(ctx context.Context, warehouse int) error 
 		}
 
 		if diff != 0 {
-			return fmt.Errorf("[DATA ERROR] count(*) in warehouse %d, but got %f", warehouse, diff)
+			return workload.NewDataError(fmt.Sprintf("count(*) in warehouse %d, but got %f", warehouse, diff))
 		}
 	}
 

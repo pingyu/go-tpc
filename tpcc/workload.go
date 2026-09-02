@@ -231,11 +231,18 @@ func getTPCCState(ctx context.Context) *tpccState {
 	return s
 }
 
+func recoveredError(message string, recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	return fmt.Errorf("%s: %v", message, recovered)
+}
+
 // Run implements Workloader interface
 func (w *Workloader) Run(ctx context.Context, threadID int) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic in TPC-C Run (thread %d): %v", threadID, r)
+			err = recoveredError(fmt.Sprintf("panic in TPC-C Run (thread %d)", threadID), r)
 		}
 	}()
 
@@ -243,10 +250,10 @@ func (w *Workloader) Run(ctx context.Context, threadID int) (err error) {
 	refreshConn := false
 
 	// Helper function to safely refresh connection with panic recovery
-	safeRefreshConn := func() error {
+	safeRefreshConn := func() (refreshErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("panic during connection refresh (thread %d): %v", threadID, r)
+				refreshErr = recoveredError(fmt.Sprintf("panic during connection refresh (thread %d)", threadID), r)
 			}
 		}()
 		return s.RefreshConn(ctx)

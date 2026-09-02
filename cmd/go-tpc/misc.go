@@ -2,16 +2,10 @@ package main
 
 import (
 	"context"
-	sqldrv "database/sql/driver"
-	"errors"
 	"fmt"
-	"io"
-	"net"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/go-tpc/pkg/workload"
 )
 
@@ -68,7 +62,11 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 	case "cleanup":
 		return w.Cleanup(ctx, index)
 	case "check":
-		return w.Check(ctx, index)
+		err := w.Check(ctx, index)
+		if shouldIgnoreError(err) {
+			return nil
+		}
+		return err
 	}
 
 	// This loop is only reached for "run" action since other actions return earlier
@@ -87,7 +85,7 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 		err := w.Run(ctx, index)
 		if err != nil {
 			// Check if the error is due to timeout/cancellation
-			if ctx.Err() != nil {
+			if ctx.Err() != nil && (isPureContextTermination(err) || isToleratedNetworkError(err)) {
 				if !silence {
 					fmt.Printf("[%s] %s worker %d stopped due to timeout: %v\n",
 						time.Now().Format("2006-01-02 15:04:05"), action, index, err)
@@ -98,7 +96,7 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 			if !silence {
 				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
 			}
-			if !ignoreError || !isToleratedNetworkError(err) {
+			if !shouldIgnoreError(err) {
 				return err
 			}
 		}
@@ -107,42 +105,15 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 	return nil
 }
 
-func isToleratedNetworkError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var multipleErr interface{ Unwrap() []error }
-	if errors.As(err, &multipleErr) {
-		return false
-	}
-	if errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, sqldrv.ErrBadConn) ||
-		errors.Is(err, mysql.ErrInvalidConn) {
-		return true
-	}
-
-	var operationErr *net.OpError
-	if errors.As(err, &operationErr) {
-		return true
-	}
-
-	return errors.Is(err, syscall.ECONNABORTED) ||
-		errors.Is(err, syscall.ECONNREFUSED) ||
-		errors.Is(err, syscall.ECONNRESET) ||
-		errors.Is(err, syscall.EHOSTUNREACH) ||
-		errors.Is(err, syscall.ENETRESET) ||
-		errors.Is(err, syscall.ENETUNREACH) ||
-		errors.Is(err, syscall.EPIPE) ||
-		errors.Is(err, syscall.ETIMEDOUT)
-}
-
-func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) {
+func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) error {
 	var wg sync.WaitGroup
 	wg.Add(threads)
 
-	outputCtx, outputCancel := context.WithCancel(ctx)
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	defer stopWorkers()
+	outputCtx, outputCancel := context.WithCancel(workerCtx)
 	ch := make(chan struct{}, 1)
+	workerErrors := make(chan error, threads)
 	go func() {
 		ticker := time.NewTicker(outputInterval)
 		defer ticker.Stop()
@@ -209,17 +180,25 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	for i := 0; i < threads; i++ {
 		go func(index int) {
 			defer wg.Done()
-			if err := execute(ctx, w, action, threads, index); err != nil {
+			if err := execute(workerCtx, w, action, threads, index); err != nil {
 				if action == "prepare" {
 					panic(fmt.Sprintf("a fatal occurred when preparing data: %v", err))
 				}
 				fmt.Printf("execute %s failed, err %v\n", action, err)
-				return
+				workerErrors <- err
+				stopWorkers()
 			}
 		}(i)
 	}
 
 	wg.Wait()
+	close(workerErrors)
+	var firstError error
+	for err := range workerErrors {
+		if firstError == nil {
+			firstError = err
+		}
+	}
 
 	if action == "prepare" {
 		// For prepare, we must check the data consistency after all prepare finished
@@ -228,4 +207,5 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	outputCancel()
 
 	<-ch
+	return firstError
 }
