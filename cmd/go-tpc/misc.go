@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	sqldrv "database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/go-tpc/pkg/workload"
 )
 
@@ -92,13 +98,43 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 			if !silence {
 				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
 			}
-			if !ignoreError {
+			if !ignoreError || !isToleratedNetworkError(err) {
 				return err
 			}
 		}
 	}
 
 	return nil
+}
+
+func isToleratedNetworkError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var multipleErr interface{ Unwrap() []error }
+	if errors.As(err, &multipleErr) {
+		return false
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, sqldrv.ErrBadConn) ||
+		errors.Is(err, mysql.ErrInvalidConn) {
+		return true
+	}
+
+	var operationErr *net.OpError
+	if errors.As(err, &operationErr) {
+		return true
+	}
+
+	return errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETRESET) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT)
 }
 
 func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) {
