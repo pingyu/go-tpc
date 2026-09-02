@@ -10,32 +10,37 @@ import (
 	"github.com/pingcap/go-tpc/pkg/workload"
 )
 
-func checkPrepare(ctx context.Context, w workload.Workloader) {
+func checkPrepare(ctx context.Context, w workload.Workloader, threads int) error {
 	// skip preparation check in csv case
 	if w.Name() == "tpcc-csv" {
 		fmt.Println("Skip preparing checking. Please load CSV data into database and check later.")
-		return
+		return nil
 	}
 	if w.Name() == "tpcc" && tpccConfig.NoCheck {
-		return
+		return nil
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(threads)
+	checkErrors := make(chan error, threads)
 	for i := 0; i < threads; i++ {
 		go func(index int) {
 			defer wg.Done()
 
-			ctx = w.InitThread(ctx, index)
-			defer w.CleanupThread(ctx, index)
+			threadCtx := w.InitThread(ctx, index)
+			defer w.CleanupThread(threadCtx, index)
 
-			if err := w.CheckPrepare(ctx, index); err != nil {
-				fmt.Printf("check prepare failed, err %v\n", err)
-				return
+			if err := w.CheckPrepare(threadCtx, index); err != nil {
+				checkErrors <- fmt.Errorf("check prepare worker %d: %w", index, err)
 			}
 		}(i)
 	}
 	wg.Wait()
+	close(checkErrors)
+	for err := range checkErrors {
+		return err
+	}
+	return nil
 }
 
 func execute(timeoutCtx context.Context, w workload.Workloader, action string, threads, index int) error {
@@ -219,7 +224,7 @@ func executeConfiguredWorkload(ctx context.Context, setting workLoaderSetting, a
 
 	if action == "prepare" && firstError == nil {
 		// For prepare, we must check the data consistency after all prepare finished
-		checkPrepare(ctx, w)
+		return checkPrepare(ctx, w, threads)
 	}
 	return firstError
 }

@@ -425,7 +425,7 @@ WHERE c_w_id = ? AND order_count - %d != new_order_count`
 		}
 
 		if count != 0 {
-			return workload.NewDataError(fmt.Sprintf("all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be 2100 in warehouse %d", warehouse))
+			return workload.NewDataError(fmt.Sprintf("all of (count(*) from ORDER) - (count(*) from NEW-ORDER) for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID) should be %d in warehouse %d", expected, warehouse))
 		}
 	}
 

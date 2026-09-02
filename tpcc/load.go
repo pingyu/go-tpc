@@ -22,6 +22,10 @@ const (
 	timeFormat = "2006-01-02 15:04:05"
 )
 
+func initialOrderLineItemID(r *rand.Rand) int {
+	return randInt(r, 1, maxItems)
+}
+
 func (w *Workloader) loadItem(ctx context.Context) error {
 	fmt.Printf("load to item\n")
 	s := getTPCCState(ctx)
@@ -187,7 +191,7 @@ c_discount, c_balance, c_ytd_payment, c_payment_cnt, c_delivery_cnt, c_data) VAL
 		cCreditLim := 50000.00
 		cDisCount := float64(randInt(s.R, 0, 5000)) / float64(10000.0)
 		cBalance := -10.00
-		cYtdPayment := 10.00
+		cYtdPayment := ytdPaymentPerCustomer
 		cPaymentCnt := 1
 		cDeliveryCnt := 0
 		cData := randChars(s.R, s.Buf, 300, 500)
@@ -322,7 +326,7 @@ ol_i_id, ol_supply_w_id, ol_delivery_d, ol_quantity, ol_amount, ol_dist_info) VA
 			olDID := district
 			olWID := warehouse
 			olNumber := j + 1
-			olIID := randInt(s.R, 1, 100000)
+			olIID := initialOrderLineItemID(s.R)
 			olSupplyWID := warehouse
 			olQuantity := 5
 

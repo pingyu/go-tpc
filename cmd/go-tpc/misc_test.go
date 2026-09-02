@@ -16,16 +16,17 @@ import (
 )
 
 type errorWorkloader struct {
-	name       string
-	runErr     error
-	prepareErr error
-	checkErr   error
-	execErr    error
-	exec       func(context.Context) error
-	onRun      func()
-	run        func(context.Context) error
-	runCount   int
-	checkCount int
+	name            string
+	runErr          error
+	prepareErr      error
+	prepareCheckErr error
+	checkErr        error
+	execErr         error
+	exec            func(context.Context) error
+	onRun           func()
+	run             func(context.Context) error
+	runCount        int
+	checkCount      int
 }
 
 func (w *errorWorkloader) Name() string {
@@ -46,7 +47,7 @@ func (w *errorWorkloader) Prepare(context.Context, int) error {
 }
 
 func (w *errorWorkloader) CheckPrepare(context.Context, int) error {
-	return nil
+	return w.prepareCheckErr
 }
 
 func (w *errorWorkloader) Run(ctx context.Context, _ int) error {
@@ -301,6 +302,19 @@ func TestExecuteWorkload_returns_prepare_worker_error(t *testing.T) {
 
 	// Then
 	require.ErrorIs(t, err, prepareErr)
+}
+
+func TestExecuteWorkload_returns_post_prepare_check_error(t *testing.T) {
+	// Given
+	configureExecuteTest(t, false)
+	checkErr := workload.NewDataError("prepared data is inconsistent")
+	w := &errorWorkloader{prepareCheckErr: checkErr}
+
+	// When
+	err := executeWorkload(context.Background(), w, 1, "prepare")
+
+	// Then
+	require.ErrorIs(t, err, checkErr)
 }
 
 func TestExecuteWorkload_returns_view_setup_error(t *testing.T) {
