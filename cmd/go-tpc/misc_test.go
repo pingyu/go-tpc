@@ -36,8 +36,8 @@ func (w *errorWorkloader) Name() string {
 	return "test"
 }
 
-func (w *errorWorkloader) InitThread(ctx context.Context, _ int) context.Context {
-	return ctx
+func (w *errorWorkloader) InitThread(ctx context.Context, _ int) (context.Context, error) {
+	return ctx, nil
 }
 
 func (w *errorWorkloader) CleanupThread(context.Context, int) {}
@@ -291,9 +291,9 @@ func TestExecuteWorkload_returns_nonignored_worker_error(t *testing.T) {
 	require.ErrorIs(t, err, dataErr)
 }
 
-func TestExecuteWorkload_returns_prepare_worker_error(t *testing.T) {
+func TestExecuteWorkload_returns_prepare_worker_error_when_ignore_error_is_enabled(t *testing.T) {
 	// Given
-	configureExecuteTest(t, false)
+	configureExecuteTest(t, true)
 	prepareErr := errors.New("prepare failed")
 	w := &errorWorkloader{prepareErr: prepareErr}
 
@@ -304,10 +304,10 @@ func TestExecuteWorkload_returns_prepare_worker_error(t *testing.T) {
 	require.ErrorIs(t, err, prepareErr)
 }
 
-func TestExecuteWorkload_returns_post_prepare_check_error(t *testing.T) {
+func TestExecuteWorkload_returns_post_prepare_check_error_when_ignore_error_is_enabled(t *testing.T) {
 	// Given
-	configureExecuteTest(t, false)
-	checkErr := workload.NewDataError("prepared data is inconsistent")
+	configureExecuteTest(t, true)
+	checkErr := errors.New("prepared data is inconsistent")
 	w := &errorWorkloader{prepareCheckErr: checkErr}
 
 	// When

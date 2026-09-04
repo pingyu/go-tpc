@@ -27,7 +27,11 @@ func checkPrepare(ctx context.Context, w workload.Workloader, threads int) error
 		go func(index int) {
 			defer wg.Done()
 
-			threadCtx := w.InitThread(ctx, index)
+			threadCtx, err := w.InitThread(ctx, index)
+			if err != nil {
+				checkErrors <- fmt.Errorf("init check prepare worker %d: %w", index, err)
+				return
+			}
 			defer w.CleanupThread(threadCtx, index)
 
 			if err := w.CheckPrepare(threadCtx, index); err != nil {
@@ -48,11 +52,13 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 
 	// For prepare, cleanup and check operations, use background context to avoid timeout constraints
 	// Only run phases should be limited by timeout
-	var ctx context.Context
+	initCtx := timeoutCtx
 	if action == "prepare" || action == "cleanup" || action == "check" {
-		ctx = w.InitThread(context.Background(), index)
-	} else {
-		ctx = w.InitThread(timeoutCtx, index)
+		initCtx = context.Background()
+	}
+	ctx, err := w.InitThread(initCtx, index)
+	if err != nil {
+		return err
 	}
 	defer w.CleanupThread(ctx, index)
 

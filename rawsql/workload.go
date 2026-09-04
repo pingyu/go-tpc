@@ -63,14 +63,18 @@ func (w *Workloader) Name() string {
 	return "rawsql"
 }
 
-func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
+func (w *Workloader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, w.db)
+	if err != nil {
+		return nil, fmt.Errorf("init raw SQL thread %d: %w", threadID, err)
+	}
 	s := &rawsqlState{
 		queryIdx: threadID,
-		TpcState: workload.NewTpcState(ctx, w.db),
+		TpcState: tpcState,
 	}
 
 	ctx = context.WithValue(ctx, stateKey, s)
-	return ctx
+	return ctx, nil
 }
 
 func (w *Workloader) getState(ctx context.Context) *rawsqlState {

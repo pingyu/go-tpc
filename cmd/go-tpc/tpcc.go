@@ -65,7 +65,7 @@ func executeTpcc(action string) error {
 	default:
 		// Set a reasonable connection max lifetime when auto-refresh is enabled
 		// This ensures connections are actually closed and not just returned to pool
-		if tpccConfig.ConnRefreshInterval > 0 {
+		if globalDB != nil && tpccConfig.ConnRefreshInterval > 0 {
 			globalDB.SetConnMaxLifetime(tpccConfig.ConnRefreshInterval)
 			fmt.Printf("Auto-setting connection max lifetime to %v (refresh interval)\n", tpccConfig.ConnRefreshInterval)
 		}
@@ -74,8 +74,7 @@ func executeTpcc(action string) error {
 	}
 
 	if err != nil {
-		fmt.Printf("Failed to init work loader: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init work loader: %w", err)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)

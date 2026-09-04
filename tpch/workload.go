@@ -100,14 +100,18 @@ func (w *Workloader) Name() string {
 }
 
 // InitThread inits thread
-func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
+func (w *Workloader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, w.db)
+	if err != nil {
+		return nil, fmt.Errorf("init TPC-H thread %d: %w", threadID, err)
+	}
 	s := &tpchState{
 		queryIdx: threadID % len(w.cfg.QueryNames),
-		TpcState: workload.NewTpcState(ctx, w.db),
+		TpcState: tpcState,
 	}
 	ctx = context.WithValue(ctx, stateKey, s)
 
-	return ctx
+	return ctx, nil
 }
 
 // CleanupThread cleans up thread

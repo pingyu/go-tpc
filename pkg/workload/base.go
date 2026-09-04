@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -32,13 +33,13 @@ func (t *TpcState) RefreshConn(ctx context.Context) error {
 }
 
 // NewTpcState creates a base TpcState
-func NewTpcState(ctx context.Context, db *sql.DB) *TpcState {
+func NewTpcState(ctx context.Context, db *sql.DB) (*TpcState, error) {
 	var conn *sql.Conn
-	var err error
 	if db != nil {
+		var err error
 		conn, err = db.Conn(ctx)
 		if err != nil {
-			panic(err.Error())
+			return nil, fmt.Errorf("get database connection: %w", err)
 		}
 	}
 
@@ -50,5 +51,5 @@ func NewTpcState(ctx context.Context, db *sql.DB) *TpcState {
 		R:    r,
 		Buf:  util.NewBufAllocator(),
 	}
-	return s
+	return s, nil
 }

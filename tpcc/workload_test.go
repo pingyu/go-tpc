@@ -20,3 +20,15 @@ func TestRecoveredError_formats_non_error_values(t *testing.T) {
 	require.EqualError(t, err, "transaction panic: broken invariant")
 	require.False(t, errors.Is(err, io.ErrUnexpectedEOF))
 }
+
+func TestNewWorkloader_returns_error_when_database_is_unavailable(t *testing.T) {
+	// Given
+	cfg := &Config{}
+
+	// When
+	w, err := NewWorkloader(nil, cfg)
+
+	// Then
+	require.Nil(t, w)
+	require.EqualError(t, err, "failed to connect to database when loading data")
+}

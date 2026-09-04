@@ -25,9 +25,9 @@ type CSVWorkLoader struct {
 	// to be generated when preparing csv data.
 	tables map[string]bool
 
-	createTableWg  sync.WaitGroup
-	createTableErr error
-	initLoadTime   string
+	createTableOnce sync.Once
+	createTableErr  error
+	initLoadTime    string
 
 	ddlManager *ddlManager
 }
@@ -77,10 +77,6 @@ func NewCSVWorkloader(db *sql.DB, cfg *Config) (*CSVWorkLoader, error) {
 	if !w.tables[tableOrders] && w.tables[tableOrderLine] {
 		return nil, fmt.Errorf("\nTable orders must be specified if you want to generate table order_line.")
 	}
-	if w.db != nil {
-		w.createTableWg.Add(cfg.Threads)
-	}
-
 	return w, nil
 }
 
@@ -88,9 +84,13 @@ func (c *CSVWorkLoader) Name() string {
 	return "tpcc-csv"
 }
 
-func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) context.Context {
+func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, c.db)
+	if err != nil {
+		return nil, fmt.Errorf("init TPC-C CSV thread %d: %w", threadID, err)
+	}
 	s := &tpccState{
-		TpcState: workload.NewTpcState(ctx, c.db),
+		TpcState: tpcState,
 	}
 
 	s.loaders = make(map[string]*sink.CSVSink)
@@ -103,7 +103,7 @@ func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) context.Co
 	}
 
 	ctx = context.WithValue(ctx, stateKey, s)
-	return ctx
+	return ctx, nil
 }
 
 func (c *CSVWorkLoader) CleanupThread(ctx context.Context, _ int) {
@@ -118,11 +118,9 @@ func (c *CSVWorkLoader) CleanupThread(ctx context.Context, _ int) {
 
 func (c *CSVWorkLoader) Prepare(ctx context.Context, threadID int) error {
 	if c.db != nil {
-		if threadID == 0 {
+		c.createTableOnce.Do(func() {
 			c.createTableErr = c.ddlManager.createTables(ctx, c.cfg.Driver)
-		}
-		c.createTableWg.Done()
-		c.createTableWg.Wait()
+		})
 		if c.createTableErr != nil {
 			return fmt.Errorf("create tables: %w", c.createTableErr)
 		}

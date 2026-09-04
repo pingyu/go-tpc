@@ -7,7 +7,7 @@ import (
 // Workloader is the interface for running customized workload
 type Workloader interface {
 	Name() string
-	InitThread(ctx context.Context, threadID int) context.Context
+	InitThread(ctx context.Context, threadID int) (context.Context, error)
 	CleanupThread(ctx context.Context, threadID int)
 	Prepare(ctx context.Context, threadID int) error
 	CheckPrepare(ctx context.Context, threadID int) error
