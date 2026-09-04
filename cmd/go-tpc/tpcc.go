@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
@@ -18,7 +17,7 @@ import (
 
 var tpccConfig tpcc.Config
 
-func executeTpcc(action string) {
+func executeTpcc(action string) error {
 	if pprofAddr != "" {
 		go func() {
 			if err := http.ListenAndServe(pprofAddr, http.DefaultServeMux); err != nil {
@@ -65,7 +64,7 @@ func executeTpcc(action string) {
 	default:
 		// Set a reasonable connection max lifetime when auto-refresh is enabled
 		// This ensures connections are actually closed and not just returned to pool
-		if tpccConfig.ConnRefreshInterval > 0 {
+		if globalDB != nil && tpccConfig.ConnRefreshInterval > 0 {
 			globalDB.SetConnMaxLifetime(tpccConfig.ConnRefreshInterval)
 			fmt.Printf("Auto-setting connection max lifetime to %v (refresh interval)\n", tpccConfig.ConnRefreshInterval)
 		}
@@ -74,17 +73,19 @@ func executeTpcc(action string) {
 	}
 
 	if err != nil {
-		fmt.Printf("Failed to init work loader: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init work loader: %w", err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
+	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
 
-	executeWorkload(timeoutCtx, w, threads, action)
+	if err := executeWorkload(workloadCtx, w, threads, action); err != nil {
+		return fmt.Errorf("execute %s failed: %w", action, err)
+	}
 
 	fmt.Println("Finished")
 	w.OutputStats(true)
+	return nil
 }
 
 func registerTpcc(root *cobra.Command) {
@@ -99,8 +100,8 @@ func registerTpcc(root *cobra.Command) {
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare data for TPCC",
-		Run: func(cmd *cobra.Command, _ []string) {
-			executeTpcc("prepare")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return executeTpcc("prepare")
 		},
 	}
 	cmdPrepare.PersistentFlags().BoolVar(&tpccConfig.NoCheck, "no-check", false, "TPCC prepare check, default false")
@@ -117,8 +118,8 @@ func registerTpcc(root *cobra.Command) {
 	var cmdRun = &cobra.Command{
 		Use:   "run",
 		Short: "Run workload",
-		Run: func(cmd *cobra.Command, _ []string) {
-			executeTpcc("run")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return executeTpcc("run")
 		},
 	}
 	cmdRun.PersistentFlags().BoolVar(&tpccConfig.Wait, "wait", false, "including keying & thinking time described on TPC-C Standard Specification")
@@ -129,16 +130,16 @@ func registerTpcc(root *cobra.Command) {
 	var cmdCleanup = &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup data for the workload",
-		Run: func(cmd *cobra.Command, _ []string) {
-			executeTpcc("cleanup")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return executeTpcc("cleanup")
 		},
 	}
 
 	var cmdCheck = &cobra.Command{
 		Use:   "check",
 		Short: "Check data consistency for the workload",
-		Run: func(cmd *cobra.Command, _ []string) {
-			executeTpcc("check")
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return executeTpcc("check")
 		},
 	}
 

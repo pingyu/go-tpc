@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,60 +10,70 @@ import (
 	"github.com/pingcap/go-tpc/pkg/workload"
 )
 
-func checkPrepare(ctx context.Context, w workload.Workloader) {
+func checkPrepare(ctx context.Context, w workload.Workloader, threads int) error {
 	// skip preparation check in csv case
 	if w.Name() == "tpcc-csv" {
 		fmt.Println("Skip preparing checking. Please load CSV data into database and check later.")
-		return
+		return nil
 	}
 	if w.Name() == "tpcc" && tpccConfig.NoCheck {
-		return
+		return nil
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(threads)
+	checkErrors := make(chan error, threads)
 	for i := 0; i < threads; i++ {
 		go func(index int) {
 			defer wg.Done()
 
-			ctx = w.InitThread(ctx, index)
-			defer w.CleanupThread(ctx, index)
-
-			if err := w.CheckPrepare(ctx, index); err != nil {
-				fmt.Printf("check prepare failed, err %v\n", err)
+			threadCtx, err := w.InitThread(ctx, index)
+			if err != nil {
+				checkErrors <- fmt.Errorf("init check prepare worker %d: %w", index, err)
 				return
+			}
+			defer w.CleanupThread(threadCtx, index)
+
+			if err := w.CheckPrepare(threadCtx, index); err != nil {
+				checkErrors <- fmt.Errorf("check prepare worker %d: %w", index, err)
 			}
 		}(i)
 	}
 	wg.Wait()
+	close(checkErrors)
+	for err := range checkErrors {
+		return err
+	}
+	return nil
 }
 
-func execute(timeoutCtx context.Context, w workload.Workloader, action string, threads, index int) error {
+func newWorkloadContext(parent context.Context, action string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if action == "run" {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
+}
+
+func execute(ctx context.Context, w workload.Workloader, action string, threads, index int) error {
 	count := totalCount / threads
 
-	// For prepare, cleanup and check operations, use background context to avoid timeout constraints
-	// Only run phases should be limited by timeout
-	var ctx context.Context
-	if action == "prepare" || action == "cleanup" || action == "check" {
-		ctx = w.InitThread(context.Background(), index)
-	} else {
-		ctx = w.InitThread(timeoutCtx, index)
+	ctx, err := w.InitThread(ctx, index)
+	if err != nil {
+		return err
 	}
 	defer w.CleanupThread(ctx, index)
 
 	switch action {
 	case "prepare":
-		// Do cleanup only if dropData is set and not generate csv data.
-		if dropData {
-			if err := w.Cleanup(ctx, index); err != nil {
-				return err
-			}
-		}
 		return w.Prepare(ctx, index)
 	case "cleanup":
 		return w.Cleanup(ctx, index)
 	case "check":
-		return w.Check(ctx, index)
+		err := w.Check(ctx, index)
+		if shouldIgnoreError(err) {
+			return nil
+		}
+		return err
 	}
 
 	// This loop is only reached for "run" action since other actions return earlier
@@ -71,8 +82,8 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 		select {
 		case <-ctx.Done():
 			if !silence {
-				fmt.Printf("[%s] %s worker %d stopped due to timeout after %d iterations\n",
-					time.Now().Format("2006-01-02 15:04:05"), action, index, i)
+				fmt.Printf("[%s] %s worker %d stopped due to %s after %d iterations\n",
+					time.Now().Format("2006-01-02 15:04:05"), action, index, contextTerminationReason(ctx), i)
 			}
 			return nil
 		default:
@@ -81,32 +92,54 @@ func execute(timeoutCtx context.Context, w workload.Workloader, action string, t
 		err := w.Run(ctx, index)
 		if err != nil {
 			// Check if the error is due to timeout/cancellation
-			if ctx.Err() != nil {
+			if ctx.Err() != nil && (isPureContextTermination(err) || isToleratedNetworkError(err)) {
 				if !silence {
-					fmt.Printf("[%s] %s worker %d stopped due to timeout: %v\n",
-						time.Now().Format("2006-01-02 15:04:05"), action, index, err)
+					fmt.Printf("[%s] %s worker %d stopped due to %s: %v\n",
+						time.Now().Format("2006-01-02 15:04:05"), action, index, contextTerminationReason(ctx), err)
 				}
-				return nil // Don't treat timeout as an error
+				return nil
 			}
 
-			if !silence {
-				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
+			if shouldIgnoreError(err) {
+				if !silence {
+					fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
+				}
+				continue
 			}
-			if !ignoreError {
-				return err
-			}
+			return err
 		}
 	}
 
 	return nil
 }
 
-func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) {
+func executeWorkload(ctx context.Context, w workload.Workloader, threads int, action string) error {
+	return executeConfiguredWorkload(ctx, workLoaderSetting{workLoader: w, threads: threads}, action)
+}
+
+type workLoaderSetting struct {
+	workLoader    workload.Workloader
+	threads       int
+	onWorkerError func(error)
+}
+
+func executeConfiguredWorkload(ctx context.Context, setting workLoaderSetting, action string) error {
+	w := setting.workLoader
+	threads := setting.threads
+	if action == "prepare" && dropData {
+		if err := executeConfiguredWorkload(ctx, setting, "cleanup"); err != nil {
+			return fmt.Errorf("cleanup before prepare: %w", err)
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(threads)
 
-	outputCtx, outputCancel := context.WithCancel(ctx)
+	workerCtx, stopWorkers := context.WithCancel(ctx)
+	defer stopWorkers()
+	outputCtx, outputCancel := context.WithCancel(workerCtx)
 	ch := make(chan struct{}, 1)
+	workerErrors := make(chan error, threads)
 	go func() {
 		ticker := time.NewTicker(outputInterval)
 		defer ticker.Stop()
@@ -121,8 +154,12 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 			}
 		}
 	}()
+	defer func() {
+		outputCancel()
+		<-ch
+	}()
 	if w.Name() == "tpch" && action == "run" {
-		err := w.Exec(`create or replace view revenue0 (supplier_no, total_revenue) as
+		err := execWorkloadSQL(workerCtx, w, `create or replace view revenue0 (supplier_no, total_revenue) as
 	select
 		l_suppkey,
 		sum(l_extendedprice * (1 - l_discount))
@@ -134,7 +171,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	group by
 		l_suppkey;`)
 		if err != nil {
-			panic(fmt.Sprintf("a fatal occurred when preparing view data: %v", err))
+			return fmt.Errorf("prepare tpch view: %w", err)
 		}
 	}
 	// CH benchmark requires the revenue1 view for analytical queries.
@@ -143,7 +180,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	// the view won't exist. So we create it here when action is "run" to ensure
 	// the view is available regardless of how data was loaded.
 	if w.Name() == "ch" && action == "run" {
-		err := w.Exec(`create or replace view revenue1 (supplier_no, total_revenue) as (
+		err := execWorkloadSQL(workerCtx, w, `create or replace view revenue1 (supplier_no, total_revenue) as (
     select	mod((s_w_id * s_i_id),10000) as supplier_no,
               sum(ol_amount) as total_revenue
     from	order_line, stock
@@ -151,7 +188,7 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
       and ol_delivery_d >= '2007-01-02 00:00:00.000000'
     group by mod((s_w_id * s_i_id),10000));`)
 		if err != nil {
-			panic(fmt.Sprintf("a fatal occurred when preparing view data: %v", err))
+			return fmt.Errorf("prepare ch view: %w", err)
 		}
 	}
 	enabledDumpPlanReplayer := w.IsPlanReplayerDumpEnabled()
@@ -173,23 +210,44 @@ func executeWorkload(ctx context.Context, w workload.Workloader, threads int, ac
 	for i := 0; i < threads; i++ {
 		go func(index int) {
 			defer wg.Done()
-			if err := execute(ctx, w, action, threads, index); err != nil {
-				if action == "prepare" {
-					panic(fmt.Sprintf("a fatal occurred when preparing data: %v", err))
+			if err := execute(workerCtx, w, action, threads, index); err != nil {
+				workerErrors <- err
+				if setting.onWorkerError != nil {
+					setting.onWorkerError(err)
 				}
-				fmt.Printf("execute %s failed, err %v\n", action, err)
-				return
+				stopWorkers()
 			}
 		}(i)
 	}
 
 	wg.Wait()
-
-	if action == "prepare" {
-		// For prepare, we must check the data consistency after all prepare finished
-		checkPrepare(ctx, w)
+	close(workerErrors)
+	var firstError error
+	for err := range workerErrors {
+		if firstError == nil {
+			firstError = err
+		}
 	}
-	outputCancel()
 
-	<-ch
+	if action == "prepare" && firstError == nil {
+		// For prepare, we must check the data consistency after all prepare finished
+		return checkPrepare(ctx, w, threads)
+	}
+	return firstError
+}
+
+func contextTerminationReason(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "cancellation"
+}
+
+func execWorkloadSQL(ctx context.Context, w workload.Workloader, sql string) error {
+	if executor, ok := w.(interface {
+		ExecContext(context.Context, string) error
+	}); ok {
+		return executor.ExecContext(ctx, sql)
+	}
+	return w.Exec(sql)
 }

@@ -99,8 +99,9 @@ type Workloader struct {
 
 	cfg *Config
 
-	createTableWg sync.WaitGroup
-	initLoadTime  string
+	createTableOnce sync.Once
+	createTableErr  error
+	initLoadTime    string
 
 	ddlManager *ddlManager
 
@@ -114,7 +115,7 @@ type Workloader struct {
 // NewWorkloader creates the tpc-c workloader
 func NewWorkloader(db *sql.DB, cfg *Config) (workload.Workloader, error) {
 	if db == nil && cfg.OutputType == "" {
-		panic(fmt.Errorf("failed to connect to database when loading data"))
+		return nil, fmt.Errorf("failed to connect to database when loading data")
 	}
 
 	if cfg.Parts > cfg.Warehouses {
@@ -160,10 +161,6 @@ func NewWorkloader(db *sql.DB, cfg *Config) (workload.Workloader, error) {
 		{name: "stock_level", action: w.runStockLevel, weight: cfg.Weight[4], keyingTime: 2, thinkingTime: 5},
 	}
 
-	if w.db != nil {
-		w.createTableWg.Add(cfg.Threads)
-	}
-
 	return w, nil
 }
 
@@ -173,9 +170,13 @@ func (w *Workloader) Name() string {
 }
 
 // InitThread implements Workloader interface
-func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
+func (w *Workloader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, w.db)
+	if err != nil {
+		return nil, fmt.Errorf("init TPC-C thread %d: %w", threadID, err)
+	}
 	s := &tpccState{
-		TpcState:        workload.NewTpcState(ctx, w.db),
+		TpcState:        tpcState,
 		index:           0,
 		decks:           make([]int, 0, 23),
 		lastConnRefresh: time.Now(),
@@ -191,7 +192,7 @@ func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Conte
 
 	ctx = context.WithValue(ctx, stateKey, s)
 
-	return ctx
+	return ctx, nil
 }
 
 // CleanupThread implements Workloader interface
@@ -214,13 +215,12 @@ func (w *Workloader) CleanupThread(ctx context.Context, threadID int) {
 // Prepare implements Workloader interface
 func (w *Workloader) Prepare(ctx context.Context, threadID int) error {
 	if w.db != nil {
-		if threadID == 0 {
-			if err := w.ddlManager.createTables(ctx, w.cfg.Driver); err != nil {
-				return err
-			}
+		w.createTableOnce.Do(func() {
+			w.createTableErr = w.ddlManager.createTables(ctx, w.cfg.Driver)
+		})
+		if w.createTableErr != nil {
+			return fmt.Errorf("create tables: %w", w.createTableErr)
 		}
-		w.createTableWg.Done()
-		w.createTableWg.Wait()
 	}
 
 	return prepareWorkload(ctx, w, w.cfg.Threads, w.cfg.Warehouses, threadID)
@@ -231,11 +231,18 @@ func getTPCCState(ctx context.Context) *tpccState {
 	return s
 }
 
+func recoveredError(message string, recovered any) error {
+	if err, ok := recovered.(error); ok {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	return fmt.Errorf("%s: %v", message, recovered)
+}
+
 // Run implements Workloader interface
 func (w *Workloader) Run(ctx context.Context, threadID int) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic in TPC-C Run (thread %d): %v", threadID, r)
+			err = recoveredError(fmt.Sprintf("panic in TPC-C Run (thread %d)", threadID), r)
 		}
 	}()
 
@@ -243,10 +250,10 @@ func (w *Workloader) Run(ctx context.Context, threadID int) (err error) {
 	refreshConn := false
 
 	// Helper function to safely refresh connection with panic recovery
-	safeRefreshConn := func() error {
+	safeRefreshConn := func() (refreshErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("panic during connection refresh (thread %d): %v", threadID, r)
+				refreshErr = recoveredError(fmt.Sprintf("panic during connection refresh (thread %d)", threadID), r)
 			}
 		}()
 		return s.RefreshConn(ctx)
@@ -454,27 +461,32 @@ func (w *Workloader) OutputStats(ifSummaryReport bool) {
 				totalOps += hist.GetInfo().Ops
 			}
 		}
+		var (
+			tpmC     float64
+			tpmTotal float64
+			efc      float64
+		)
 		if newOrderHist != nil && !newOrderHist.Empty() {
 			result := newOrderHist.GetInfo()
 			const specWarehouseFactor = 12.86
-			tpmC := result.Ops * 60
-			tpmTotal := totalOps * 60
-			efc := 100 * tpmC / (specWarehouseFactor * float64(w.cfg.Warehouses))
-			lines := [][]string{
-				{
-					util.FloatToOneString(tpmC),
-					util.FloatToOneString(tpmTotal),
-					util.FloatToOneString(efc) + "%",
-				},
-			}
-			switch w.cfg.OutputStyle {
-			case util.OutputStylePlain:
-				util.RenderString("tpmC: %s, tpmTotal: %s, efficiency: %s\n", nil, lines)
-			case util.OutputStyleTable:
-				util.RenderTable([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
-			case util.OutputStyleJson:
-				util.RenderJson([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
-			}
+			tpmC = result.Ops * 60
+			tpmTotal = totalOps * 60
+			efc = 100 * tpmC / (specWarehouseFactor * float64(w.cfg.Warehouses))
+		}
+		lines := [][]string{
+			{
+				util.FloatToOneString(tpmC),
+				util.FloatToOneString(tpmTotal),
+				util.FloatToOneString(efc) + "%",
+			},
+		}
+		switch w.cfg.OutputStyle {
+		case util.OutputStylePlain:
+			util.RenderString("tpmC: %s, tpmTotal: %s, efficiency: %s\n", nil, lines)
+		case util.OutputStyleTable:
+			util.RenderTable([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
+		case util.OutputStyleJson:
+			util.RenderJson([]string{"tpmC", "tpmTotal", "efficiency"}, lines)
 		}
 	}
 }

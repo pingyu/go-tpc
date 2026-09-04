@@ -25,8 +25,9 @@ type CSVWorkLoader struct {
 	// to be generated when preparing csv data.
 	tables map[string]bool
 
-	createTableWg sync.WaitGroup
-	initLoadTime  string
+	createTableOnce sync.Once
+	createTableErr  error
+	initLoadTime    string
 
 	ddlManager *ddlManager
 }
@@ -76,10 +77,6 @@ func NewCSVWorkloader(db *sql.DB, cfg *Config) (*CSVWorkLoader, error) {
 	if !w.tables[tableOrders] && w.tables[tableOrderLine] {
 		return nil, fmt.Errorf("\nTable orders must be specified if you want to generate table order_line.")
 	}
-	if w.db != nil {
-		w.createTableWg.Add(cfg.Threads)
-	}
-
 	return w, nil
 }
 
@@ -87,9 +84,13 @@ func (c *CSVWorkLoader) Name() string {
 	return "tpcc-csv"
 }
 
-func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) context.Context {
+func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, c.db)
+	if err != nil {
+		return nil, fmt.Errorf("init TPC-C CSV thread %d: %w", threadID, err)
+	}
 	s := &tpccState{
-		TpcState: workload.NewTpcState(ctx, c.db),
+		TpcState: tpcState,
 	}
 
 	s.loaders = make(map[string]*sink.CSVSink)
@@ -102,7 +103,7 @@ func (c *CSVWorkLoader) InitThread(ctx context.Context, threadID int) context.Co
 	}
 
 	ctx = context.WithValue(ctx, stateKey, s)
-	return ctx
+	return ctx, nil
 }
 
 func (c *CSVWorkLoader) CleanupThread(ctx context.Context, _ int) {
@@ -117,13 +118,12 @@ func (c *CSVWorkLoader) CleanupThread(ctx context.Context, _ int) {
 
 func (c *CSVWorkLoader) Prepare(ctx context.Context, threadID int) error {
 	if c.db != nil {
-		if threadID == 0 {
-			if err := c.ddlManager.createTables(ctx, c.cfg.Driver); err != nil {
-				return err
-			}
+		c.createTableOnce.Do(func() {
+			c.createTableErr = c.ddlManager.createTables(ctx, c.cfg.Driver)
+		})
+		if c.createTableErr != nil {
+			return fmt.Errorf("create tables: %w", c.createTableErr)
 		}
-		c.createTableWg.Done()
-		c.createTableWg.Wait()
 	}
 
 	return prepareWorkload(ctx, c, c.cfg.Threads, c.cfg.Warehouses, threadID)
@@ -199,7 +199,7 @@ func (c *CSVWorkLoader) loadWarehouse(ctx context.Context, warehouse int) error 
 	wState := randState(s.R, s.Buf)
 	wZip := randZip(s.R, s.Buf)
 	wTax := randTax(s.R)
-	wYtd := 300000.00
+	wYtd := districtPerWarehouse * customerPerDistrict * ytdPaymentPerCustomer
 
 	if err := l.WriteRow(ctx,
 		warehouse, wName, wStree1, wStree2, wCity, wState, wZip, wTax, wYtd,
@@ -272,8 +272,8 @@ func (c *CSVWorkLoader) loadDistrict(ctx context.Context, warehouse int) error {
 		dState := randState(s.R, s.Buf)
 		dZip := randZip(s.R, s.Buf)
 		dTax := randTax(s.R)
-		dYtd := 30000.00
-		dNextOID := 3001
+		dYtd := customerPerDistrict * ytdPaymentPerCustomer
+		dNextOID := orderPerDistrict + 1
 
 		if err := l.WriteRow(ctx,
 			dID, dWID,
@@ -302,7 +302,7 @@ func (c *CSVWorkLoader) loadCustomer(ctx context.Context, warehouse int, distric
 		cDID := district
 		cWID := warehouse
 		var cLast string
-		if i < 1000 {
+		if i < customerPerDistrict/3 {
 			cLast = randCLastSyllables(i, s.Buf)
 		} else {
 			cLast = randCLast(s.R, s.Buf)
@@ -323,7 +323,7 @@ func (c *CSVWorkLoader) loadCustomer(ctx context.Context, warehouse int, distric
 		cCreditLim := 50000.00
 		cDisCount := float64(randInt(s.R, 0, 5000)) / float64(10000.0)
 		cBalance := -10.00
-		cYtdPayment := 10.00
+		cYtdPayment := ytdPaymentPerCustomer
 		cPaymentCnt := 1
 		cDeliveryCnt := 0
 		cData := randChars(s.R, s.Buf, 300, 500)
@@ -360,7 +360,7 @@ func (c *CSVWorkLoader) loadHistory(ctx context.Context, warehouse int, district
 		hDID := district
 		hWID := warehouse
 		hDate := c.initLoadTime
-		hAmount := 10.00
+		hAmount := ytdPaymentPerCustomer
 		hData := randChars(s.R, s.Buf, 12, 24)
 
 		if err := l.WriteRow(ctx,
@@ -396,7 +396,7 @@ func (c *CSVWorkLoader) loadOrder(ctx context.Context, warehouse int, district i
 		oWID := warehouse
 		oEntryD := c.initLoadTime
 		oCarrierID := "NULL"
-		if oID < 2101 {
+		if oID < orderPerDistrict-newOrderPerDistrict+1 {
 			oCarrierID = strconv.FormatInt(int64(randInt(s.R, 1, 10)), 10)
 		}
 		oOLCnt := randInt(s.R, 5, 15)
@@ -427,7 +427,7 @@ func (c *CSVWorkLoader) loadNewOrder(ctx context.Context, warehouse int, distric
 	for i := 0; i < newOrderPerDistrict; i++ {
 		s.Buf.Reset()
 
-		noOID := 2101 + i
+		noOID := orderPerDistrict - newOrderPerDistrict + i + 1
 		noDID := district
 		noWID := warehouse
 
@@ -461,13 +461,13 @@ func (c *CSVWorkLoader) loadOrderLine(ctx context.Context, warehouse int,
 			olDID := district
 			olWID := warehouse
 			olNumber := j + 1
-			olIID := randInt(s.R, 1, 100000)
+			olIID := initialOrderLineItemID(s.R)
 			olSupplyWID := warehouse
 			olQuantity := 5
 
 			var olAmount float64
 			var olDeliveryD string
-			if olOID < 2101 {
+			if olOID < orderPerDistrict-newOrderPerDistrict+1 {
 				olDeliveryD = c.initLoadTime
 				olAmount = 0.00
 			} else {

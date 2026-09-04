@@ -197,8 +197,10 @@ func isDBNotExist(err error) bool {
 
 func main() {
 	var rootCmd = &cobra.Command{
-		Use:   "go-tpc",
-		Short: "Benchmark database with different workloads",
+		Use:           "go-tpc",
+		Short:         "Benchmark database with different workloads",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if len(targets) == 0 {
 				targets = makeTargets(hosts, ports)
@@ -271,7 +273,13 @@ func main() {
 		}
 	}()
 
-	rootCmd.Execute()
+	if err := rootCmd.Execute(); err != nil {
+		cancel()
+		if !silence {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(1)
+	}
 
 	cancel()
 }

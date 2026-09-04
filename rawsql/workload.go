@@ -63,14 +63,18 @@ func (w *Workloader) Name() string {
 	return "rawsql"
 }
 
-func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
+func (w *Workloader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, w.db)
+	if err != nil {
+		return nil, fmt.Errorf("init raw SQL thread %d: %w", threadID, err)
+	}
 	s := &rawsqlState{
 		queryIdx: threadID,
-		TpcState: workload.NewTpcState(ctx, w.db),
+		TpcState: tpcState,
 	}
 
 	ctx = context.WithValue(ctx, stateKey, s)
-	return ctx
+	return ctx, nil
 }
 
 func (w *Workloader) getState(ctx context.Context) *rawsqlState {
@@ -114,7 +118,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 	rows, err := s.Conn.QueryContext(ctx, query)
 	w.measurement.Measure(queryName, time.Since(start), err)
 	if err != nil {
-		return fmt.Errorf("execute query %s failed %v", queryName, err)
+		return fmt.Errorf("execute query %s failed: %w", queryName, err)
 	}
 	if w.cfg.ExecExplainAnalyze {
 		table, err := util.RenderExplainAnalyze(rows)

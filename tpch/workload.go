@@ -100,14 +100,18 @@ func (w *Workloader) Name() string {
 }
 
 // InitThread inits thread
-func (w *Workloader) InitThread(ctx context.Context, threadID int) context.Context {
+func (w *Workloader) InitThread(ctx context.Context, threadID int) (context.Context, error) {
+	tpcState, err := workload.NewTpcState(ctx, w.db)
+	if err != nil {
+		return nil, fmt.Errorf("init TPC-H thread %d: %w", threadID, err)
+	}
 	s := &tpchState{
 		queryIdx: threadID % len(w.cfg.QueryNames),
-		TpcState: workload.NewTpcState(ctx, w.db),
+		TpcState: tpcState,
 	}
 	ctx = context.WithValue(ctx, stateKey, s)
 
-	return ctx
+	return ctx, nil
 }
 
 // CleanupThread cleans up thread
@@ -223,7 +227,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 	rows, err := s.Conn.QueryContext(ctx, query)
 	defer w.measurement.Measure(queryName, time.Now().Sub(start), err)
 	if err != nil {
-		return fmt.Errorf("execute %s failed %v", queryName, err)
+		return fmt.Errorf("execute %s failed: %w", queryName, err)
 	}
 	defer rows.Close()
 
@@ -236,7 +240,7 @@ func (w *Workloader) Run(ctx context.Context, threadID int) error {
 		return nil
 	}
 	if err := w.scanQueryResult(queryName, rows); err != nil {
-		return fmt.Errorf("check %s failed %v", queryName, err)
+		return fmt.Errorf("check %s failed: %w", queryName, err)
 	}
 	return nil
 }
@@ -316,9 +320,10 @@ func (w *Workloader) FinishPlanReplayerDump() error {
 }
 
 func (w *Workloader) Exec(sql string) error {
-	_, err := w.db.Exec(sql)
-	if err != nil {
-		return err
-	}
-	return nil
+	return w.ExecContext(context.Background(), sql)
+}
+
+func (w *Workloader) ExecContext(ctx context.Context, sql string) error {
+	_, err := w.db.ExecContext(ctx, sql)
+	return err
 }
