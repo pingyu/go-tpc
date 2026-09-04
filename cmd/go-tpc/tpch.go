@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -71,10 +70,10 @@ func executeTpch(action string) error {
 	tpchConfig.PrepareThreads = threads
 	tpchConfig.QueryNames = strings.Split(tpchConfig.RawQueries, ",")
 	w := tpch.NewWorkloader(globalDB, &tpchConfig)
-	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
+	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
 
-	if err := executeWorkload(timeoutCtx, w, threads, action); err != nil {
+	if err := executeWorkload(workloadCtx, w, threads, action); err != nil {
 		return fmt.Errorf("execute %s failed: %w", action, err)
 	}
 	fmt.Println("Finished")

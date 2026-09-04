@@ -173,18 +173,18 @@ func executeCH(action string, openAP func() (*sql.DB, error)) error {
 		fmt.Printf("Failed to init tp work loader: %v\n", err)
 		os.Exit(1)
 	}
-	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
+	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
 
 	if action == "prepare" {
-		if err := executeWorkload(timeoutCtx, ap, 1, "prepare"); err != nil {
+		if err := executeWorkload(workloadCtx, ap, 1, "prepare"); err != nil {
 			return fmt.Errorf("execute prepare failed: %w", err)
 		}
 		return nil
 	}
 
 	settings := []workLoaderSetting{{workLoader: tp, threads: threads}, {workLoader: ap, threads: acThreads}}
-	if err := executeCHWorkloads(timeoutCtx, settings); err != nil {
+	if err := executeCHWorkloads(workloadCtx, settings); err != nil {
 		return err
 	}
 	fmt.Printf("Finished: %d OLTP workers, %d OLAP workers\n", threads, acThreads)

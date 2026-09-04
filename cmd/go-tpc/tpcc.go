@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
@@ -77,10 +76,10 @@ func executeTpcc(action string) error {
 		return fmt.Errorf("init work loader: %w", err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
+	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
 
-	if err := executeWorkload(timeoutCtx, w, threads, action); err != nil {
+	if err := executeWorkload(workloadCtx, w, threads, action); err != nil {
 		return fmt.Errorf("execute %s failed: %w", action, err)
 	}
 

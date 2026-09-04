@@ -47,16 +47,17 @@ func checkPrepare(ctx context.Context, w workload.Workloader, threads int) error
 	return nil
 }
 
-func execute(timeoutCtx context.Context, w workload.Workloader, action string, threads, index int) error {
+func newWorkloadContext(parent context.Context, action string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if action == "run" {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
+}
+
+func execute(ctx context.Context, w workload.Workloader, action string, threads, index int) error {
 	count := totalCount / threads
 
-	// For prepare, cleanup and check operations, use background context to avoid timeout constraints
-	// Only run phases should be limited by timeout
-	initCtx := timeoutCtx
-	if action == "prepare" || action == "cleanup" || action == "check" {
-		initCtx = context.Background()
-	}
-	ctx, err := w.InitThread(initCtx, index)
+	ctx, err := w.InitThread(ctx, index)
 	if err != nil {
 		return err
 	}
@@ -211,10 +212,10 @@ func executeConfiguredWorkload(ctx context.Context, setting workLoaderSetting, a
 			defer wg.Done()
 			if err := execute(workerCtx, w, action, threads, index); err != nil {
 				workerErrors <- err
-				stopWorkers()
 				if setting.onWorkerError != nil {
 					setting.onWorkerError(err)
 				}
+				stopWorkers()
 			}
 		}(i)
 	}

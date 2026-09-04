@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -101,9 +100,9 @@ func execRawsql(action string) error {
 
 	w := rawsql.NewWorkloader(globalDB, &rawsqlConfig)
 
-	timeoutCtx, cancel := context.WithTimeout(globalCtx, totalTime)
+	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
-	if err := executeWorkload(timeoutCtx, w, threads, action); err != nil {
+	if err := executeWorkload(workloadCtx, w, threads, action); err != nil {
 		return fmt.Errorf("execute %s failed: %w", action, err)
 	}
 	fmt.Println("Finished")
