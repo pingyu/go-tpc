@@ -168,9 +168,6 @@ func executeCH(action string, openAP func() (*sql.DB, error)) error {
 		db.SetMaxIdleConns(acThreads + 1)
 		ap = ch.NewWorkloader(db, &chConfig)
 	}
-	if err != nil {
-		return fmt.Errorf("init tp work loader: %w", err)
-	}
 	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
 

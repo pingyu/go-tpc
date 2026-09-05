@@ -4,10 +4,12 @@ import (
 	"context"
 	sqldrv "database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/go-tpc/pkg/workload"
@@ -19,6 +21,9 @@ func shouldIgnoreError(err error) bool {
 
 func ignoreCommandError(err error) error {
 	if shouldIgnoreError(err) {
+		if !silence {
+			fmt.Printf("[%s] ignore error: %v\n", time.Now().Format("2006-01-02 15:04:05"), err)
+		}
 		return nil
 	}
 	return err

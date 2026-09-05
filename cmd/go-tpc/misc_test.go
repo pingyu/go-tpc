@@ -100,7 +100,7 @@ func (w *errorWorkloader) ExecContext(ctx context.Context, _ string) error {
 	return w.execErr
 }
 
-func TestExecute_returns_all_non_data_errors_to_command_boundary(t *testing.T) {
+func TestExecute_ignores_non_data_errors_per_iteration_when_enabled(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -116,19 +116,20 @@ func TestExecute_returns_all_non_data_errors_to_command_boundary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Given
 			configureExecuteTest(t, true)
+			totalCount = 3
 			w := &errorWorkloader{runErr: tt.err}
 
 			// When
 			err := execute(context.Background(), w, "run", 1, 0)
 
 			// Then
-			require.ErrorIs(t, err, tt.err)
-			require.Equal(t, int32(1), w.runCount.Load())
+			require.NoError(t, err)
+			require.Equal(t, int32(3), w.runCount.Load())
 		})
 	}
 }
 
-func TestExecute_does_not_report_errors_owned_by_command_boundary(t *testing.T) {
+func TestExecute_reports_ignored_errors_and_continues(t *testing.T) {
 	// Given
 	configureExecuteTest(t, true)
 	silence = false
@@ -142,8 +143,9 @@ func TestExecute_does_not_report_errors_owned_by_command_boundary(t *testing.T) 
 	})
 
 	// Then
-	require.ErrorIs(t, err, runErr)
-	require.NotContains(t, output, runErr.Error())
+	require.NoError(t, err)
+	require.Contains(t, output, "execute run failed")
+	require.Contains(t, output, runErr.Error())
 }
 
 func TestExecute_never_ignores_typed_data_errors(t *testing.T) {
@@ -293,7 +295,7 @@ func TestExecuteWorkload_returns_nonignored_worker_error(t *testing.T) {
 
 func TestExecuteConfiguredWorkload_prefers_data_error_over_ordinary_error(t *testing.T) {
 	// Given
-	configureExecuteTest(t, true)
+	configureExecuteTest(t, false)
 	ordinaryErr := errors.New("ordinary worker error")
 	dataErr := workload.NewDataError("inconsistent warehouse totals")
 	started := make(chan struct{}, 2)

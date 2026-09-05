@@ -87,7 +87,7 @@ func TestTpccRunCommand_ignores_workloader_init_error_when_ignore_error_is_enabl
 	require.NoError(t, err)
 }
 
-func TestRawsqlRunCommand_ignores_validation_error_when_ignore_error_is_enabled(t *testing.T) {
+func TestRawsqlRunCommand_returns_validation_error_even_when_ignore_error_is_enabled(t *testing.T) {
 	// Given
 	configureExecuteTest(t, true)
 	previousQueryFiles := queryFiles
@@ -101,7 +101,7 @@ func TestRawsqlRunCommand_ignores_validation_error_when_ignore_error_is_enabled(
 	err := cmd.RunE(cmd, nil)
 
 	// Then
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "empty query files")
 }
 
 func TestRunCommands_handle_errors_at_the_correct_boundary(t *testing.T) {
@@ -353,7 +353,7 @@ func TestExecuteCHWorkloads_returns_worker_error_and_cancels_peer(t *testing.T) 
 
 func TestExecuteCHWorkloads_prefers_data_error_over_ordinary_error(t *testing.T) {
 	// Given
-	configureExecuteTest(t, true)
+	configureExecuteTest(t, false)
 	ordinaryErr := errors.New("ordinary worker error")
 	dataErr := workload.NewDataError("inconsistent warehouse totals")
 	dataStarted := make(chan struct{})

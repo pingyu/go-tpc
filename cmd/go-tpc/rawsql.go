@@ -26,13 +26,11 @@ func registerRawsql(root *cobra.Command) {
 		Use:   "run",
 		Short: "Run workload",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			var err error
+			// Usage errors must surface even with --ignore-error.
 			if len(queryFiles) == 0 {
-				err = fmt.Errorf("empty query files")
-			} else {
-				err = execRawsql("run")
+				return fmt.Errorf("empty query files")
 			}
-			return ignoreCommandError(err)
+			return ignoreCommandError(execRawsql("run"))
 		},
 	}
 
