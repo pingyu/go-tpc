@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 
@@ -33,12 +32,13 @@ func isSysVarSupported(ver util.SemVersion, sysVar string) bool {
 }
 
 func executeTpch(action string) error {
-	openDB()
+	if err := openDB(); err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
 	defer closeDB()
 
 	if globalDB == nil {
-		util.StdErrLogger.Printf("cannot connect to the database")
-		os.Exit(1)
+		return fmt.Errorf("cannot connect to the database")
 	}
 	if maxProcs != 0 {
 		runtime.GOMAXPROCS(maxProcs)
@@ -47,14 +47,14 @@ func executeTpch(action string) error {
 	if action == "run" && driver == mysqlDriver && tpchConfig.EnableQueryTuning {
 		serverVer, err := getServerVersion(globalDB)
 		if err != nil {
-			panic(fmt.Errorf("get server version failed: %v", err))
+			return fmt.Errorf("get server version failed: %w", err)
 		}
 		fmt.Printf("Server version: %s\n", serverVer)
 
 		if semVer, ok := util.NewTiDBSemVersion(serverVer); ok {
 			fmt.Printf("Enabling query tuning for TiDB version %s.\n", semVer.String())
 			if err := setTiDBQueryTuningVars(globalDB, semVer); err != nil {
-				panic(fmt.Errorf("set session variables failed: %v", err))
+				return fmt.Errorf("set session variables failed: %w", err)
 			}
 		} else {
 			fmt.Printf("Query tuning is enabled(by default) but server version doesn't appear to be TiDB, skipping tuning.\n")
@@ -168,7 +168,7 @@ func registerTpch(root *cobra.Command) {
 		Use:   "run",
 		Short: "Run workload",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return executeTpch("run")
+			return ignoreCommandError(executeTpch("run"))
 		},
 	}
 

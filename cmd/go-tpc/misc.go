@@ -69,11 +69,7 @@ func execute(ctx context.Context, w workload.Workloader, action string, threads,
 	case "cleanup":
 		return w.Cleanup(ctx, index)
 	case "check":
-		err := w.Check(ctx, index)
-		if shouldIgnoreError(err) {
-			return nil
-		}
-		return err
+		return w.Check(ctx, index)
 	}
 
 	// This loop is only reached for "run" action since other actions return earlier
@@ -100,12 +96,6 @@ func execute(ctx context.Context, w workload.Workloader, action string, threads,
 				return nil
 			}
 
-			if shouldIgnoreError(err) {
-				if !silence {
-					fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), action, err)
-				}
-				continue
-			}
 			return err
 		}
 	}
@@ -224,9 +214,7 @@ func executeConfiguredWorkload(ctx context.Context, setting workLoaderSetting, a
 	close(workerErrors)
 	var firstError error
 	for err := range workerErrors {
-		if firstError == nil {
-			firstError = err
-		}
+		firstError = selectWorkerError(firstError, err)
 	}
 
 	if action == "prepare" && firstError == nil {

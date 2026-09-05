@@ -3,12 +3,10 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path"
 	"strings"
 	"time"
 
-	"github.com/pingcap/go-tpc/pkg/util"
 	"github.com/pingcap/go-tpc/rawsql"
 	"github.com/spf13/cobra"
 )
@@ -28,11 +26,13 @@ func registerRawsql(root *cobra.Command) {
 		Use:   "run",
 		Short: "Run workload",
 		RunE: func(_ *cobra.Command, _ []string) error {
+			var err error
 			if len(queryFiles) == 0 {
-				return fmt.Errorf("empty query files")
+				err = fmt.Errorf("empty query files")
+			} else {
+				err = execRawsql("run")
 			}
-
-			return execRawsql("run")
+			return ignoreCommandError(err)
 		},
 	}
 
@@ -68,13 +68,14 @@ func registerRawsql(root *cobra.Command) {
 }
 
 func execRawsql(action string) error {
-	openDB()
+	if err := openDB(); err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
 	defer closeDB()
 
 	// if globalDB == nil
 	if globalDB == nil {
-		util.StdErrLogger.Printf("cannot connect to the database")
-		os.Exit(1)
+		return fmt.Errorf("cannot connect to the database")
 	}
 
 	rawsqlConfig.OutputStyle = outputStyle
@@ -88,8 +89,7 @@ func execRawsql(action string) error {
 	for i, filename := range rawsqlConfig.QueryNames {
 		queryData, err := ioutil.ReadFile(filename)
 		if err != nil {
-			util.StdErrLogger.Printf("read file: %s, err: %v\n", filename, err)
-			os.Exit(1)
+			return fmt.Errorf("read file %s: %w", filename, err)
 		}
 
 		baseName := path.Base(filename)

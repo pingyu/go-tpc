@@ -156,29 +156,34 @@ func closeDB() {
 	globalDB = nil
 }
 
-func openDB() {
+func openDB() error {
 	var (
 		tmpDB *sql.DB
 		err   error
 	)
 	globalDB, err = newDB(targets, driver, user, password, dbName, connParams)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if err := globalDB.Ping(); err != nil {
 		if isDBNotExist(err) {
-			tmpDB, _ = newDB(targets, driver, user, password, "", connParams)
+			tmpDB, err = newDB(targets, driver, user, password, "", connParams)
+			if err != nil {
+				return err
+			}
 			defer tmpDB.Close()
 			if _, err := tmpDB.Exec(createDBDDL + dbName); err != nil {
-				panic(fmt.Errorf("failed to create database, err %v", err))
+				return fmt.Errorf("failed to create database: %w", err)
 			}
 		} else {
 			fmt.Printf("failed to ping db, err %v\n", err)
+			globalDB.Close()
 			globalDB = nil
 		}
 	} else {
 		globalDB.SetMaxIdleConns(threads + acThreads + 1)
 	}
+	return nil
 }
 
 func isDBNotExist(err error) bool {

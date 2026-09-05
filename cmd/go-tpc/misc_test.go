@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ type errorWorkloader struct {
 	exec            func(context.Context) error
 	onRun           func()
 	run             func(context.Context) error
-	runCount        int
+	runCount        atomic.Int32
 	checkCount      int
 }
 
@@ -51,7 +52,7 @@ func (w *errorWorkloader) CheckPrepare(context.Context, int) error {
 }
 
 func (w *errorWorkloader) Run(ctx context.Context, _ int) error {
-	w.runCount++
+	w.runCount.Add(1)
 	if w.onRun != nil {
 		w.onRun()
 	}
@@ -99,7 +100,7 @@ func (w *errorWorkloader) ExecContext(ctx context.Context, _ string) error {
 	return w.execErr
 }
 
-func TestExecute_ignores_all_non_data_errors_when_ignore_error_is_enabled(t *testing.T) {
+func TestExecute_returns_all_non_data_errors_to_command_boundary(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -115,20 +116,19 @@ func TestExecute_ignores_all_non_data_errors_when_ignore_error_is_enabled(t *tes
 		t.Run(tt.name, func(t *testing.T) {
 			// Given
 			configureExecuteTest(t, true)
-			totalCount = 2
 			w := &errorWorkloader{runErr: tt.err}
 
 			// When
 			err := execute(context.Background(), w, "run", 1, 0)
 
 			// Then
-			require.NoError(t, err)
-			require.Equal(t, 2, w.runCount)
+			require.ErrorIs(t, err, tt.err)
+			require.Equal(t, int32(1), w.runCount.Load())
 		})
 	}
 }
 
-func TestExecute_reports_ignored_error_when_not_silent(t *testing.T) {
+func TestExecute_does_not_report_errors_owned_by_command_boundary(t *testing.T) {
 	// Given
 	configureExecuteTest(t, true)
 	silence = false
@@ -142,8 +142,8 @@ func TestExecute_reports_ignored_error_when_not_silent(t *testing.T) {
 	})
 
 	// Then
-	require.NoError(t, err)
-	require.Contains(t, output, runErr.Error())
+	require.ErrorIs(t, err, runErr)
+	require.NotContains(t, output, runErr.Error())
 }
 
 func TestExecute_never_ignores_typed_data_errors(t *testing.T) {
@@ -175,7 +175,7 @@ func TestExecute_never_ignores_typed_data_errors(t *testing.T) {
 
 			// Then
 			require.ErrorIs(t, err, tt.err)
-			require.Equal(t, 1, w.runCount)
+			require.Equal(t, int32(1), w.runCount.Load())
 		})
 	}
 }
@@ -190,10 +190,10 @@ func TestExecute_returns_non_data_errors_when_ignore_error_is_disabled(t *testin
 
 	// Then
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-	require.Equal(t, 1, w.runCount)
+	require.Equal(t, int32(1), w.runCount.Load())
 }
 
-func TestExecute_ignores_non_data_errors_during_check(t *testing.T) {
+func TestExecute_returns_non_data_check_errors_to_command_boundary(t *testing.T) {
 	// Given
 	configureExecuteTest(t, true)
 	w := &errorWorkloader{checkErr: fmt.Errorf("check query failed: %w", mysql.ErrInvalidConn)}
@@ -202,7 +202,7 @@ func TestExecute_ignores_non_data_errors_during_check(t *testing.T) {
 	err := execute(context.Background(), w, "check", 1, 0)
 
 	// Then
-	require.NoError(t, err)
+	require.ErrorIs(t, err, w.checkErr)
 	require.Equal(t, 1, w.checkCount)
 }
 
@@ -243,7 +243,7 @@ func TestExecute_never_ignores_typed_data_errors_when_deadline_fires(t *testing.
 			err := execute(ctx, w, "run", 1, 0)
 
 			require.ErrorIs(t, err, tt.err)
-			require.Equal(t, 1, w.runCount)
+			require.Equal(t, int32(1), w.runCount.Load())
 		})
 	}
 }
@@ -257,7 +257,7 @@ func TestExecute_treats_pure_context_or_network_errors_as_deadline_completion(t 
 		err := execute(ctx, w, "run", 1, 0)
 
 		require.NoError(t, err)
-		require.Equal(t, 1, w.runCount)
+		require.Equal(t, int32(1), w.runCount.Load())
 	}
 }
 
@@ -288,6 +288,51 @@ func TestExecuteWorkload_returns_nonignored_worker_error(t *testing.T) {
 
 	err := executeWorkload(context.Background(), w, 1, "run")
 
+	require.ErrorIs(t, err, dataErr)
+}
+
+func TestExecuteConfiguredWorkload_prefers_data_error_over_ordinary_error(t *testing.T) {
+	// Given
+	configureExecuteTest(t, true)
+	ordinaryErr := errors.New("ordinary worker error")
+	dataErr := workload.NewDataError("inconsistent warehouse totals")
+	started := make(chan struct{}, 2)
+	releaseOrdinary := make(chan struct{})
+	releaseData := make(chan struct{})
+	ordinaryObserved := make(chan struct{})
+	var calls atomic.Int32
+	w := &errorWorkloader{run: func(context.Context) error {
+		call := calls.Add(1)
+		started <- struct{}{}
+		if call == 1 {
+			<-releaseOrdinary
+			return ordinaryErr
+		}
+		<-releaseData
+		return dataErr
+	}}
+	done := make(chan error, 1)
+	go func() {
+		done <- executeConfiguredWorkload(context.Background(), workLoaderSetting{
+			workLoader: w,
+			threads:    2,
+			onWorkerError: func(err error) {
+				if errors.Is(err, ordinaryErr) {
+					close(ordinaryObserved)
+				}
+			},
+		}, "run")
+	}()
+	<-started
+	<-started
+	close(releaseOrdinary)
+	<-ordinaryObserved
+	close(releaseData)
+
+	// When
+	err := <-done
+
+	// Then
 	require.ErrorIs(t, err, dataErr)
 }
 

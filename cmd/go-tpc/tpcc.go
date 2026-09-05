@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -19,30 +20,22 @@ var tpccConfig tpcc.Config
 
 func executeTpcc(action string) error {
 	if pprofAddr != "" {
-		go func() {
-			if err := http.ListenAndServe(pprofAddr, http.DefaultServeMux); err != nil {
-				fmt.Printf("Failed to listen pprofAddr: %v\n", err)
-				os.Exit(1)
-			}
-		}()
+		if err := startHTTPServer(pprofAddr, http.DefaultServeMux); err != nil {
+			return fmt.Errorf("listen on pprof address: %w", err)
+		}
 	}
 	if metricsAddr != "" {
-		go func() {
-			s := http.Server{
-				Addr:    metricsAddr,
-				Handler: promhttp.Handler(),
-			}
-			if err := s.ListenAndServe(); err != nil {
-				fmt.Printf("Failed to listen metricsAddr: %v\n", err)
-				os.Exit(1)
-			}
-		}()
+		if err := startHTTPServer(metricsAddr, promhttp.Handler()); err != nil {
+			return fmt.Errorf("listen on metrics address: %w", err)
+		}
 	}
 	if maxProcs != 0 {
 		runtime.GOMAXPROCS(maxProcs)
 	}
 
-	openDB()
+	if err := openDB(); err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
 	defer closeDB()
 
 	tpccConfig.OutputStyle = outputStyle
@@ -88,6 +81,19 @@ func executeTpcc(action string) error {
 	return nil
 }
 
+func startHTTPServer(addr string, handler http.Handler) error {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := http.Serve(listener, handler); err != nil {
+			fmt.Printf("HTTP server failed: %v\n", err)
+		}
+	}()
+	return nil
+}
+
 func registerTpcc(root *cobra.Command) {
 	cmd := &cobra.Command{
 		Use: "tpcc",
@@ -119,7 +125,7 @@ func registerTpcc(root *cobra.Command) {
 		Use:   "run",
 		Short: "Run workload",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeTpcc("run")
+			return ignoreCommandError(executeTpcc("run"))
 		},
 	}
 	cmdRun.PersistentFlags().BoolVar(&tpccConfig.Wait, "wait", false, "including keying & thinking time described on TPC-C Standard Specification")
@@ -139,7 +145,7 @@ func registerTpcc(root *cobra.Command) {
 		Use:   "check",
 		Short: "Check data consistency for the workload",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeTpcc("check")
+			return ignoreCommandError(executeTpcc("check"))
 		},
 	}
 

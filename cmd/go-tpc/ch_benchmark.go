@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -83,9 +82,9 @@ func registerCHBenchmark(root *cobra.Command) {
 			}
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return executeCH("run", func() (*sql.DB, error) {
+			return ignoreCommandError(executeCH("run", func() (*sql.DB, error) {
 				return newDB(makeTargets(apHosts, apPorts), driver, user, password, dbName, apConnParams)
-			})
+			}))
 		},
 	}
 	cmdRun.PersistentFlags().BoolVar(&chConfig.EnablePlanReplayer,
@@ -123,7 +122,9 @@ func executeCH(action string, openAP func() (*sql.DB, error)) error {
 		runtime.GOMAXPROCS(maxProcs)
 	}
 
-	openDB()
+	if err := openDB(); err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
 	defer closeDB()
 
 	tpccConfig.OutputStyle = outputStyle
@@ -149,29 +150,26 @@ func executeCH(action string, openAP func() (*sql.DB, error)) error {
 
 	// Set a reasonable connection max lifetime when auto-refresh is enabled
 	// This ensures connections are actually closed and not just returned to pool
-	if tpccConfig.ConnRefreshInterval > 0 {
+	if globalDB != nil && tpccConfig.ConnRefreshInterval > 0 {
 		globalDB.SetConnMaxLifetime(tpccConfig.ConnRefreshInterval)
 		fmt.Printf("Auto-setting connection max lifetime to %v (refresh interval)\n", tpccConfig.ConnRefreshInterval)
 	}
 	tp, err = tpcc.NewWorkloader(globalDB, &tpccConfig)
 	if err != nil {
-		fmt.Printf("Failed to init tp work loader: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init tp work loader: %w", err)
 	}
 	if openAP == nil {
 		ap = ch.NewWorkloader(globalDB, &chConfig)
 	} else {
 		db, err := openAP()
 		if err != nil {
-			fmt.Printf("Failed to open db for analytical processing: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("open db for analytical processing: %w", err)
 		}
 		db.SetMaxIdleConns(acThreads + 1)
 		ap = ch.NewWorkloader(db, &chConfig)
 	}
 	if err != nil {
-		fmt.Printf("Failed to init tp work loader: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init tp work loader: %w", err)
 	}
 	workloadCtx, cancel := newWorkloadContext(globalCtx, action, totalTime)
 	defer cancel()
@@ -199,12 +197,13 @@ func executeCHWorkloads(ctx context.Context, settings []workLoaderSetting) error
 	defer cancelPeers()
 	group, groupCtx := errgroup.WithContext(sharedCtx)
 	var firstWorkerError error
-	var firstWorkerErrorOnce sync.Once
+	var firstWorkerErrorMu sync.Mutex
 	for _, setting := range settings {
 		setting.onWorkerError = func(err error) {
-			firstWorkerErrorOnce.Do(func() {
-				firstWorkerError = fmt.Errorf("execute %s workload: %w", setting.workLoader.Name(), err)
-			})
+			workerError := fmt.Errorf("execute %s workload: %w", setting.workLoader.Name(), err)
+			firstWorkerErrorMu.Lock()
+			firstWorkerError = selectWorkerError(firstWorkerError, workerError)
+			firstWorkerErrorMu.Unlock()
 			cancelPeers()
 		}
 		group.Go(func() error {

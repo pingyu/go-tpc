@@ -17,6 +17,13 @@ func shouldIgnoreError(err error) bool {
 	return err != nil && ignoreError && !isDataError(err)
 }
 
+func ignoreCommandError(err error) error {
+	if shouldIgnoreError(err) {
+		return nil
+	}
+	return err
+}
+
 func isPureContextTermination(err error) bool {
 	if err == nil || isDataError(err) {
 		return false
@@ -31,6 +38,13 @@ func isPureContextTermination(err error) bool {
 func isDataError(err error) bool {
 	var dataErr *workload.DataError
 	return errors.As(err, &dataErr)
+}
+
+func selectWorkerError(firstError, workerError error) error {
+	if firstError == nil || (!isDataError(firstError) && isDataError(workerError)) {
+		return workerError
+	}
+	return firstError
 }
 
 func isToleratedNetworkError(err error) bool {
